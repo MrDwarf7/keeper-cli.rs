@@ -14,6 +14,11 @@ shell.
 The authenticated account owns its session, cached vault, and current folder as
 one unit, so switching accounts cannot reuse another account's local state.
 
+Missing key material leaves inaccessible entries locked or unavailable. A failed
+decrypt or parse after key resolution is a sync error, not missing data. Errors
+retain their sources until the CLI renders them: concise output in release
+builds, contextual cause chains with `--debug` or in debug builds.
+
 `VaultPath` represents Commander's virtual paths, including `//` for a literal
 slash in a folder name. Resolution returns `PathResolution::Full` or `Partial`.
 Operating-system path components normalize those separators, so filesystem path

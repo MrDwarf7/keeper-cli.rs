@@ -140,23 +140,23 @@ impl Vault {
 
     /// Resolves an absolute or relative Commander path. `//` is a slash in a folder name.
     pub fn resolve_path(&self, cwd: &Location, path: &str) -> PathResolution {
-        if let Ok(uid) = path.parse::<Uid>()
-            && self.folders.contains_key(&uid)
-        {
-            return PathResolution::Full(Location::Folder(uid));
+        let uid = path.trim_end_matches('=');
+        if let Some((uid, _)) = self.folders.get_key_value(uid) {
+            return PathResolution::Full(Location::Folder(uid.clone()));
         }
         self.resolve_parsed_path(cwd, path.into())
     }
 
     pub fn resolve_record<'a>(&'a self, cwd: &Location, spec: &str) -> Option<&'a Record> {
-        if let Ok(uid) = spec.parse::<Uid>()
-            && let Some(record) = self.records.get(&uid)
-        {
+        if let Some(record) = self.records.get(spec.trim_end_matches('=')) {
             return Some(record);
         }
         let mut path = VaultPath::from(spec);
         let title = path.components.pop()?;
-        let folder = Location::try_from(self.resolve_parsed_path(cwd, path)).ok()?;
+        let folder = match self.resolve_parsed_path(cwd, path) {
+            PathResolution::Full(folder) => folder,
+            PathResolution::Partial { .. } => return None,
+        };
         self.records_in(&folder)
             .find(|record| record.title() == title)
             .or_else(|| {
@@ -317,6 +317,23 @@ pub(crate) mod tests {
         }
     }
 
+    fn open_vault(download: Download, ring: &KeyRing) -> crate::Result<Vault> {
+        Unlock::from(download)
+            .open_teams(ring)?
+            .open_shared_folders(ring)?
+            .key_records(ring)?
+            .into_vault(ring)
+    }
+
+    fn context_cause(error: crate::Error, uid: &[u8], stage: &str) -> crate::Error {
+        let crate::Error::Context { context, source } = error else {
+            panic!("expected contextual vault error");
+        };
+        assert!(context.contains(stage), "{context}");
+        assert!(context.contains(&Uid::from(uid).to_string()), "{context}");
+        *source
+    }
+
     /// One page exercising every key path: data-key records, a shared folder with a GCM-wrapped
     /// record, a linked child record, and a three-level folder tree.
     #[test]
@@ -401,11 +418,7 @@ pub(crate) mod tests {
             ..Default::default()
         };
 
-        let vault = Unlock::from(Download(vec![page]))
-            .open_teams(&ring)
-            .open_shared_folders(&ring)
-            .key_records(&ring)
-            .into_vault(&ring);
+        let vault = open_vault(Download(vec![page]), &ring).unwrap();
         let titles: Vec<&str> = vault.records.values().map(Record::title).collect();
         assert_eq!(titles.len(), 3, "unreachable record must be dropped: {titles:?}");
         assert!(titles.contains(&"Mine") && titles.contains(&"Shared") && titles.contains(&"Child"));
@@ -435,6 +448,94 @@ pub(crate) mod tests {
         assert_eq!(vault.folder(&deep).unwrap().shared_folder(), Some(&Uid::from(&f_sf[..])));
         assert_eq!(vault.records_in(&deep).map(Record::title).collect::<Vec<_>>(), ["Shared"]);
         assert_eq!(vault.records_in(&Location::Root).map(Record::title).collect::<Vec<_>>(), ["Mine"]);
+    }
+
+    fn fixed_key(byte: u8) -> AesKey {
+        AesKey::try_from(vec![byte; 32]).unwrap()
+    }
+
+    #[test]
+    fn tampered_known_key_gcm_record_fails_with_uid_context() {
+        let data_key = fixed_key(1);
+        let record_key = fixed_key(2);
+        let ring = KeyRing {
+            data_key: &data_key,
+            rsa:      None,
+            ecc:      None,
+        };
+        let record_uid = [17; 16];
+        let mut record = v3_record(&record_uid, &record_key, serde_json::json!({"title": "tampered"}));
+        *record.data.last_mut().unwrap() ^= 1;
+        let page = SyncDownResponse {
+            record_meta_data: vec![RecordMetaData {
+                record_uid: record_uid.to_vec(),
+                record_key: crypto::encrypt_cbc::<Pkcs7>(&record_key, &data_key).unwrap(),
+                record_key_type: RecordKeyType::EncryptedByDataKey as i32,
+                ..Default::default()
+            }],
+            records: vec![record],
+            ..Default::default()
+        };
+
+        let error = open_vault(Download(vec![page]), &ring).unwrap_err();
+        assert!(matches!(context_cause(error, &record_uid, "decrypting record data"), crate::Error::Crypto(_)));
+    }
+
+    #[test]
+    fn valid_ciphertext_with_malformed_record_json_fails_with_uid_context() {
+        let data_key = fixed_key(3);
+        let record_key = fixed_key(4);
+        let ring = KeyRing {
+            data_key: &data_key,
+            rsa:      None,
+            ecc:      None,
+        };
+        let record_uid = [18; 16];
+        let page = SyncDownResponse {
+            record_meta_data: vec![RecordMetaData {
+                record_uid: record_uid.to_vec(),
+                record_key: crypto::encrypt_cbc::<Pkcs7>(&record_key, &data_key).unwrap(),
+                record_key_type: RecordKeyType::EncryptedByDataKey as i32,
+                ..Default::default()
+            }],
+            records: vec![PbRecord {
+                record_uid: record_uid.to_vec(),
+                version: 3,
+                data: crypto::encrypt_aes_v2(b"{", &record_key).unwrap(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let error = open_vault(Download(vec![page]), &ring).unwrap_err();
+        assert!(matches!(context_cause(error, &record_uid, "parsing record data"), crate::Error::Json(_)));
+    }
+
+    #[test]
+    fn corrupt_known_key_folder_metadata_fails_with_uid_context() {
+        let data_key = fixed_key(5);
+        let folder_key = fixed_key(6);
+        let ring = KeyRing {
+            data_key: &data_key,
+            rsa:      None,
+            ecc:      None,
+        };
+        let folder_uid = [19; 16];
+        let mut folder_data = crypto::encrypt_cbc::<Pkcs7>(b"folder metadata", &folder_key).unwrap();
+        folder_data.truncate(16);
+        let page = SyncDownResponse {
+            user_folders: vec![UserFolder {
+                folder_uid: folder_uid.to_vec(),
+                user_folder_key: crypto::encrypt_cbc::<Pkcs7>(&folder_key, &data_key).unwrap(),
+                key_type: RecordKeyType::EncryptedByDataKey as i32,
+                data: folder_data,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let error = open_vault(Download(vec![page]), &ring).unwrap_err();
+        assert!(matches!(context_cause(error, &folder_uid, "opening user folder metadata"), crate::Error::Crypto(_)));
     }
     #[test]
     fn virtual_paths_resolve_escaped_names_and_unresolved_tails() {
@@ -557,7 +658,8 @@ pub(crate) mod tests {
                 UserFolder {
                     folder_uid: locked_uid.to_vec(),
                     parent_uid: user_uid.to_vec(),
-                    key_type: 999,
+                    user_folder_key: vec![1, 2, 3],
+                    key_type: RecordKeyType::EncryptedByPublicKey as i32,
                     ..Default::default()
                 },
             ],
@@ -573,11 +675,7 @@ pub(crate) mod tests {
             }],
             ..Default::default()
         };
-        let vault = Unlock::from(Download(vec![page]))
-            .open_teams(&ring)
-            .open_shared_folders(&ring)
-            .key_records(&ring)
-            .into_vault(&ring);
+        let vault = open_vault(Download(vec![page]), &ring).unwrap();
         let user = vault.folder(&Location::Folder(Uid::from(&user_uid[..]))).unwrap();
         assert_eq!(user.name, "Fallback user");
         assert!(user.key.is_some());
