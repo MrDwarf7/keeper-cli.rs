@@ -1,9 +1,14 @@
 //! Command-line surface. Names, aliases and flags follow Commander so muscle memory carries
-//! over; only the read-only vault subset is implemented.
+//! over; each subcommand's arguments are their own struct in `commands`.
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+
+use crate::commands::folders::{Cd, Ls, Tree};
+use crate::commands::generate::Generate;
+use crate::commands::records::{Get, List, ListSf, ListTeam, Search, Totp};
+use crate::commands::session::{Login, Logout, SyncDown, ThisDevice, Whoami};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,152 +53,77 @@ pub struct ShellLine {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Log in (and remember the account in the config)
-    Login { email: Option<String> },
+    Login(Login),
     /// End the session and forget this device's persistent login
-    Logout,
+    Logout(Logout),
     /// Show the logged-in account
-    Whoami {
-        #[arg(short, long)]
-        verbose: bool,
-    },
+    Whoami(Whoami),
     /// Download and decrypt the vault again
-    SyncDown,
+    SyncDown(SyncDown),
     /// List folder contents
-    Ls {
-        /// Show a detailed table
-        #[arg(short = 'l', long = "list")]
-        detail:       bool,
-        #[arg(short = 'f', long = "folders")]
-        folders_only: bool,
-        #[arg(short = 'r', long = "records")]
-        records_only: bool,
-        /// Include subfolders
-        #[arg(short = 'R', long)]
-        recursive:    bool,
-        /// Folder path or UID, or a name filter for the current folder
-        #[arg(default_value_t, hide_default_value = true)]
-        pattern:      String,
-    },
+    Ls(Ls),
     /// Change current folder (shell only)
-    Cd {
-        #[arg(default_value = "/")]
-        folder: String,
-    },
+    Cd(Cd),
     /// Display the folder structure
-    Tree {
-        /// Include records
-        #[arg(short, long)]
-        records: bool,
-        /// Show UIDs
-        #[arg(short, long)]
-        verbose: bool,
-        #[arg(default_value = "/")]
-        folder:  String,
-    },
+    Tree(Tree),
     /// List records
     #[command(visible_alias = "l")]
-    List {
-        /// Filter by record type (repeatable)
-        #[arg(short = 't', long = "type")]
-        record_type: Vec<String>,
-        #[arg(short, long)]
-        verbose:     bool,
-        #[arg(long, value_enum, default_value_t = Format::Table)]
-        format:      Format,
-        /// Search terms; every term must match
-        pattern:     Vec<String>,
-    },
+    List(List),
     /// Search records, shared folders and teams
     #[command(visible_alias = "s")]
-    Search {
-        #[arg(short, long)]
-        verbose: bool,
-        #[arg(long, value_enum, default_value_t = Format::Table)]
-        format:  Format,
-        pattern: Vec<String>,
-    },
+    Search(Search),
     /// Show a record, folder, shared folder or team
     #[command(visible_alias = "g")]
-    Get {
-        /// Show hidden field values
-        #[arg(long)]
-        unmask: bool,
-        #[arg(long, value_enum, default_value_t = DetailFormat::Detail)]
-        format: DetailFormat,
-        /// UID, or record path/title
-        uid:    String,
-    },
+    Get(Get),
     /// List shared folders
     #[command(name = "list-sf", visible_alias = "lsf")]
-    ListSf {
-        #[arg(long, value_enum, default_value_t = Format::Table)]
-        format:  Format,
-        pattern: Vec<String>,
-    },
+    ListSf(ListSf),
     /// List teams
     #[command(name = "list-team", visible_alias = "lt")]
-    ListTeam {
-        #[arg(long, value_enum, default_value_t = Format::Table)]
-        format: Format,
-    },
+    ListTeam(ListTeam),
     /// Show the current TOTP code of a record, or list records that have one
-    Totp {
-        #[arg(long)]
-        details: bool,
-        record:  Option<String>,
-    },
+    Totp(Totp),
     /// Generate passwords
-    Generate {
-        /// Password length [default: 20, or the length given in --rules]
-        #[arg(short = 'c', long = "count")]
-        length:    Option<usize>,
-        /// Number of passwords
-        #[arg(short, long, default_value_t = 1)]
-        number:    usize,
-        /// "[length,] upper, lower, digits, symbols" minimum counts
-        #[arg(short, long)]
-        rules:     Option<String>,
-        /// Minimum symbols, 0 for none
-        #[arg(short, long, allow_negative_numbers = true)]
-        symbols:   Option<i32>,
-        /// Minimum digits, 0 for none
-        #[arg(short, long, allow_negative_numbers = true)]
-        digits:    Option<i32>,
-        /// Minimum uppercase letters, 0 for none
-        #[arg(short, long, allow_negative_numbers = true)]
-        uppercase: Option<i32>,
-        /// Minimum lowercase letters, 0 for none
-        #[arg(short, long, allow_negative_numbers = true)]
-        lowercase: Option<i32>,
-        #[arg(long, value_enum, default_value_t = Format::Table)]
-        format:    Format,
-    },
+    Generate(Generate),
+    /// Create a typed vault record
+    #[command(name = "record-add", visible_alias = "ra")]
+    RecordAdd(crate::record_edit::RecordAdd),
+    /// Edit a typed vault record
+    #[command(name = "record-update", visible_alias = "ru")]
+    RecordUpdate(crate::record_edit::RecordUpdate),
+    /// Append notes to a record
+    #[command(name = "append-notes", visible_alias = "an")]
+    AppendNotes(crate::record_edit::AppendNotes),
+    /// Remove records or their folder links
+    Rm(crate::record_edit::Rm),
+    /// Create a private or shared folder
+    Mkdir(crate::folder_edit::Mkdir),
+    /// Remove folders
+    Rmdir(crate::folder_edit::Rmdir),
+    /// Rename a folder
+    Rndir(crate::folder_edit::Rndir),
+    /// Move records or folders
+    Mv(crate::folder_edit::Mv),
+    /// Download record attachments
+    #[command(name = "download-attachment", visible_alias = "da")]
+    DownloadAttachment(crate::attachment::DownloadAttachment),
+    /// Upload attachments to a typed record
+    #[command(name = "upload-attachment", visible_alias = "ua")]
+    UploadAttachment(crate::attachment::UploadAttachment),
+    /// Copy a record field to the clipboard or stdout
+    #[command(name = "clipboard-copy", visible_alias = "cc")]
+    ClipboardCopy(crate::clipboard::ClipboardCopy),
+    /// Print a record password to stdout
+    #[command(name = "find-password")]
+    FindPassword(crate::clipboard::FindPassword),
     /// Show this device's login settings, or change them
     #[command(name = "this-device")]
-    ThisDevice {
-        #[command(subcommand)]
-        action: Option<DeviceAction>,
-    },
+    ThisDevice(ThisDevice),
     /// Start the interactive shell
     Shell,
     /// Leave the shell
     #[command(visible_alias = "quit", hide = true)]
     Exit,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum DeviceAction {
-    /// Store an encrypted copy of the data key for this device
-    Register,
-    /// Turn "Stay Logged In" on or off; "on" lets commands run without the master password
-    #[command(name = "persistent-login", visible_alias = "pl")]
-    PersistentLogin { state: Toggle },
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Toggle {
-    On,
-    Off,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
