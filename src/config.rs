@@ -42,10 +42,6 @@ impl Config {
         Ok(Self { path, values })
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
     }

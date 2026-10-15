@@ -61,12 +61,14 @@ impl Totp {
             other => return Err(Error::Generic(format!("unsupported TOTP algorithm {other}"))),
         };
         let offset = (digest[digest.len() - 1] & 0x0f) as usize;
-        let binary = u32::from_be_bytes([digest[offset] & 0x7f, digest[offset + 1], digest[offset + 2], digest[offset + 3]]);
+        let binary = u32::from_be_bytes([
+            digest[offset] & 0x7f,
+            digest[offset + 1],
+            digest[offset + 2],
+            digest[offset + 3],
+        ]);
         let code = u64::from(binary) % 10u64.pow(self.digits);
-        Ok((
-            format!("{code:0width$}", width = self.digits as usize),
-            self.period - unix_time % self.period,
-        ))
+        Ok((format!("{code:0width$}", width = self.digits as usize), self.period - unix_time % self.period))
     }
 
     pub fn code_now(&self) -> Result<(String, u64)> {
@@ -98,8 +100,16 @@ mod tests {
     #[test]
     fn rfc6238_appendix_b_vectors() {
         let cases = [
-            ("SHA1", &b"12345678901234567890"[..], [(59, "94287082"), (1111111109, "07081804"), (20000000000, "65353130")]),
-            ("SHA256", b"12345678901234567890123456789012", [(59, "46119246"), (1111111109, "68084774"), (20000000000, "77737706")]),
+            (
+                "SHA1",
+                &b"12345678901234567890"[..],
+                [(59, "94287082"), (1111111109, "07081804"), (20000000000, "65353130")],
+            ),
+            (
+                "SHA256",
+                b"12345678901234567890123456789012",
+                [(59, "46119246"), (1111111109, "68084774"), (20000000000, "77737706")],
+            ),
             (
                 "SHA512",
                 b"1234567890123456789012345678901234567890123456789012345678901234",

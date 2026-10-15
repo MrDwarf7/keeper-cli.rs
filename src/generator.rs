@@ -30,7 +30,9 @@ impl Rules {
             .split(',')
             .map(|s| s.trim().parse::<i32>())
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| Error::Generic("Invalid rules. Format is \"[length,] upper, lower, digits, symbols\"".into()))?;
+            .map_err(|_| {
+                Error::Generic("Invalid rules. Format is \"[length,] upper, lower, digits, symbols\"".into())
+            })?;
         let mut rule_length = None;
         if nums.len() == 5 {
             rule_length = usize::try_from(nums.remove(0)).ok();
@@ -55,7 +57,10 @@ pub fn generate(rules: &Rules) -> Result<String> {
         (rules.uppercase, UPPER),
         (rules.lowercase, LOWER),
     ];
-    let required: usize = categories.iter().map(|(n, _)| n.unwrap_or(0).unsigned_abs() as usize).sum();
+    let required: usize = categories
+        .iter()
+        .map(|(n, _)| n.unwrap_or(0).unsigned_abs() as usize)
+        .sum();
     let extra_count = rules.length.saturating_sub(required);
     let mut extra_chars: String = categories
         .iter()
@@ -63,7 +68,11 @@ pub fn generate(rules: &Rules) -> Result<String> {
         .map(|(_, chars)| *chars)
         .collect();
     if extra_count > 0 && extra_chars.is_empty() {
-        extra_chars = categories.iter().filter(|(n, _)| n.is_some_and(|n| n < 0)).map(|(_, c)| *c).collect();
+        extra_chars = categories
+            .iter()
+            .filter(|(n, _)| n.is_some_and(|n| n < 0))
+            .map(|(_, c)| *c)
+            .collect();
         if extra_chars.is_empty() {
             return Err(Error::Generic("Password character set is empty".into()));
         }
@@ -94,7 +103,13 @@ mod tests {
     #[test]
     fn minimums_are_met_and_excluded_categories_absent() {
         for _ in 0..50 {
-            let rules = Rules { length: 16, symbols: Some(0), digits: Some(5), uppercase: Some(3), lowercase: None };
+            let rules = Rules {
+                length:    16,
+                symbols:   Some(0),
+                digits:    Some(5),
+                uppercase: Some(3),
+                lowercase: None,
+            };
             let pw = generate(&rules).unwrap();
             assert_eq!(pw.chars().count(), 16);
             assert_eq!(count(&pw, SPECIAL_CHARACTERS), 0);
@@ -104,11 +119,29 @@ mod tests {
 
     #[test]
     fn negative_counts_are_exact_and_minimums_can_exceed_length() {
-        let rules = Rules { length: 4, symbols: Some(-4), digits: Some(0), uppercase: Some(0), lowercase: Some(0) };
+        let rules = Rules {
+            length:    4,
+            symbols:   Some(-4),
+            digits:    Some(0),
+            uppercase: Some(0),
+            lowercase: Some(0),
+        };
         assert_eq!(count(&generate(&rules).unwrap(), SPECIAL_CHARACTERS), 4);
-        let rules = Rules { length: 2, symbols: Some(3), digits: Some(3), uppercase: None, lowercase: None };
+        let rules = Rules {
+            length:    2,
+            symbols:   Some(3),
+            digits:    Some(3),
+            uppercase: None,
+            lowercase: None,
+        };
         assert_eq!(generate(&rules).unwrap().len(), 6);
-        let none = Rules { length: 8, symbols: Some(0), digits: Some(0), uppercase: Some(0), lowercase: Some(0) };
+        let none = Rules {
+            length:    8,
+            symbols:   Some(0),
+            digits:    Some(0),
+            uppercase: Some(0),
+            lowercase: Some(0),
+        };
         assert!(generate(&none).is_err());
     }
 

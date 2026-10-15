@@ -69,11 +69,11 @@ pub enum Response {
 }
 
 pub struct RestContext {
-    pub server_base:  String,
-    transmission_key: Vec<u8>,
+    pub server_base:   String,
+    transmission_key:  Vec<u8>,
     pub server_key_id: i32,
-    pub locale:       String,
-    http:             reqwest::blocking::Client,
+    pub locale:        String,
+    http:              reqwest::blocking::Client,
 }
 
 /// `keepersecurity.eu` and `https://keepersecurity.eu/api/v2/` both mean the same server.
@@ -106,14 +106,18 @@ impl RestContext {
 
     fn seal_transmission_key(&self) -> Result<Vec<u8>> {
         match self.server_key_id {
-            id @ 1..=6 => crypto::encrypt_rsa(
-                &self.transmission_key,
-                &crypto::load_rsa_public_key(&b64_decode(RSA_SERVER_KEYS[id as usize - 1])?)?,
-            ),
-            id @ 7..=18 => crypto::encrypt_ec(
-                &self.transmission_key,
-                &crypto::load_ec_public_key(&b64_decode(EC_SERVER_KEYS[id as usize - 7])?)?,
-            ),
+            id @ 1..=6 => {
+                crypto::encrypt_rsa(
+                    &self.transmission_key,
+                    &crypto::load_rsa_public_key(&b64_decode(RSA_SERVER_KEYS[id as usize - 1])?)?,
+                )
+            }
+            id @ 7..=18 => {
+                crypto::encrypt_ec(
+                    &self.transmission_key,
+                    &crypto::load_ec_public_key(&b64_decode(EC_SERVER_KEYS[id as usize - 7])?)?,
+                )
+            }
             id => Err(Error::api("invalid_key_id", format!("Key ID \"{id}\" is not valid."))),
         }
     }
@@ -162,11 +166,12 @@ impl RestContext {
             }
 
             let failure = parse_failure(&body);
-            if status == 401 && failure.error == "key" {
-                if let Some(key_id) = failure.key_id.filter(|&id| id != self.server_key_id) {
-                    self.server_key_id = key_id;
-                    continue;
-                }
+            if status == 401
+                && failure.error == "key"
+                && let Some(key_id) = failure.key_id.filter(|&id| id != self.server_key_id)
+            {
+                self.server_key_id = key_id;
+                continue;
             }
             if matches!(status, 403 | 429) && failure.error == "throttled" {
                 throttle_retries += 1;
@@ -190,10 +195,12 @@ fn parse_failure(body: &[u8]) -> ApiFailure {
         serde_json::Value::Array(mut items) if !items.is_empty() => items.swap_remove(0),
         other => other,
     };
-    serde_json::from_value(value).unwrap_or_else(|_| ApiFailure {
-        error:   "unknown".into(),
-        message: String::from_utf8_lossy(body).into_owned(),
-        ..Default::default()
+    serde_json::from_value(value).unwrap_or_else(|_| {
+        ApiFailure {
+            error: "unknown".into(),
+            message: String::from_utf8_lossy(body).into_owned(),
+            ..Default::default()
+        }
     })
 }
 

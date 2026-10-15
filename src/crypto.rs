@@ -3,8 +3,10 @@
 //! raw ECDH secret as a v2 key.
 
 use aes::Aes256;
+#[cfg(test)]
+use aes::cipher::BlockEncryptMut;
 use aes::cipher::block_padding::{NoPadding, Pkcs7};
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockDecryptMut, KeyIvInit};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use hmac::{Hmac, Mac};
@@ -32,15 +34,19 @@ fn crypto_err(what: &str) -> Error {
     Error::Crypto(what.to_owned())
 }
 
+// The CLI is read-only, so CBC encryption only builds test fixtures.
+#[cfg(test)]
 pub fn encrypt_aes_v1(data: &[u8], key: &[u8]) -> Result<Vec<u8>> {
     encrypt_cbc::<Pkcs7>(data, key, &random_bytes(16), data.len() + 16)
 }
 
 /// Unpadded CBC, used only for the 64-byte doubled data key inside encryption params.
+#[cfg(test)]
 pub fn encrypt_aes_v1_nopad(data: &[u8], key: &[u8]) -> Result<Vec<u8>> {
     encrypt_cbc::<NoPadding>(data, key, &random_bytes(16), data.len())
 }
 
+#[cfg(test)]
 fn encrypt_cbc<P: aes::cipher::block_padding::Padding<aes::cipher::consts::U16>>(
     data: &[u8],
     key: &[u8],

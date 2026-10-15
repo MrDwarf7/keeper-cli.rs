@@ -43,14 +43,13 @@ use crate::proto::authentication::{
 use crate::rest::{CLIENT_VERSION, Response, RestContext};
 
 pub struct Session {
-    pub rest:        RestContext,
-    pub user:        String,
-    pub account_uid: Vec<u8>,
-    session_token:   Vec<u8>,
-    pub data_key:    Vec<u8>,
-    pub rsa_key:     Option<RsaPrivateKey>,
-    pub ecc_key:     Option<SecretKey>,
-    pub summary:     AccountSummaryElements,
+    pub rest:      RestContext,
+    pub user:      String,
+    session_token: Vec<u8>,
+    pub data_key:  Vec<u8>,
+    pub rsa_key:   Option<RsaPrivateKey>,
+    pub ecc_key:   Option<SecretKey>,
+    pub summary:   AccountSummaryElements,
 }
 
 impl Session {
@@ -125,15 +124,15 @@ fn device_name() -> String {
 }
 
 struct LoginFlow<'a> {
-    config:    &'a mut Config,
-    rest:      RestContext,
-    user:      String,
-    password:  Option<String>,
+    config:            &'a mut Config,
+    rest:              RestContext,
+    user:              String,
+    password:          Option<String>,
     /// Supplied on the command line: a wrong one must fail instead of re-prompting forever.
     password_is_fixed: bool,
-    salt:      Vec<u8>,
-    iterations: u32,
-    alternate: bool,
+    salt:              Vec<u8>,
+    iterations:        u32,
+    alternate:         bool,
 }
 
 enum DeviceTokenProblem {
@@ -221,12 +220,16 @@ impl LoginFlow<'_> {
                     self.config.save()?;
                     return Err(Error::Generic("This device is locked".into()));
                 }
-                LoginState::AccountLocked => return Err(Error::Generic(format!("User account `{}` is LOCKED", self.user))),
+                LoginState::AccountLocked => {
+                    return Err(Error::Generic(format!("User account `{}` is LOCKED", self.user)));
+                }
                 LoginState::LicenseExpired => return Err(Error::Generic("Your Keeper license has expired".into())),
                 LoginState::Upgrade => {
                     return Err(Error::Generic("Application or device is out of date and requires an update.".into()));
                 }
-                LoginState::RequiresAccountCreation => return Err(Error::Generic("This account needs to be created.".into())),
+                LoginState::RequiresAccountCreation => {
+                    return Err(Error::Generic("This account needs to be created.".into()));
+                }
                 other => return Err(Error::Generic(format!("Unsupported login state {other:?}"))),
             };
         }
@@ -265,8 +268,10 @@ impl LoginFlow<'_> {
             device_public_key: crypto::unload_ec_public_key(&private.public_key()),
             ..Default::default()
         };
-        let device = Device::decode(unauthenticated_ok(&mut self.rest, "authentication/register_device", &rq)?.as_slice())?;
-        self.config.set("device_token", Some(b64_encode(&device.encrypted_device_token)));
+        let device =
+            Device::decode(unauthenticated_ok(&mut self.rest, "authentication/register_device", &rq)?.as_slice())?;
+        self.config
+            .set("device_token", Some(b64_encode(&device.encrypted_device_token)));
         self.config.set("private_key", Some(b64_encode(&private.to_bytes())));
         self.config.save()?;
         Ok(device.encrypted_device_token)
@@ -311,7 +316,12 @@ impl LoginFlow<'_> {
         self.send_start_login(&rq, login_type)
     }
 
-    fn resume_login(&mut self, login_token: Vec<u8>, login_type: LoginType, method: LoginMethod) -> Result<LoginResponse> {
+    fn resume_login(
+        &mut self,
+        login_token: Vec<u8>,
+        login_type: LoginType,
+        method: LoginMethod,
+    ) -> Result<LoginResponse> {
         let rq = StartLoginRequest {
             client_version: CLIENT_VERSION.into(),
             username: self.user.to_lowercase(),
@@ -336,7 +346,8 @@ impl LoginFlow<'_> {
                 return self.start_login(login_type, false);
             }
             "device_not_registered"
-                if failure.additional_info.as_deref() == Some("invalid device token, not registered in this region") =>
+                if failure.additional_info.as_deref()
+                    == Some("invalid device token, not registered in this region") =>
             {
                 DeviceTokenProblem::WrongRegion
             }
@@ -377,7 +388,8 @@ impl LoginFlow<'_> {
             .or_else(|| resp.salt.first())
             .ok_or_else(|| Error::Generic("Account recovery is required; complete it in the Web Vault".into()))?;
         self.salt = salt.salt.clone();
-        self.iterations = u32::try_from(salt.iterations).map_err(|_| Error::Generic("invalid PBKDF2 iterations".into()))?;
+        self.iterations =
+            u32::try_from(salt.iterations).map_err(|_| Error::Generic("invalid PBKDF2 iterations".into()))?;
 
         let mut announced = false;
         loop {
@@ -396,8 +408,8 @@ impl LoginFlow<'_> {
                 }
             };
             let rq = ValidateAuthHashRequest {
-                password_method: PasswordMethod::Entered as i32,
-                auth_response: crypto::derive_keyhash_v1(&password, &self.salt, self.iterations),
+                password_method:       PasswordMethod::Entered as i32,
+                auth_response:         crypto::derive_keyhash_v1(&password, &self.salt, self.iterations),
                 encrypted_login_token: resp.encrypted_login_token.clone(),
             };
             match unauthenticated(&mut self.rest, "authentication/validate_auth_hash", &rq)? {
@@ -445,12 +457,14 @@ impl LoginFlow<'_> {
                     unauthenticated_ok(&mut self.rest, "authentication/request_device_verification", &rq)
                         .map(|_| eprintln!("Email sent to {}. Click the approval link, then press Enter.", self.user))
                 }
-                "2" | "kp" | "keeper_push" => self
-                    .send_push(&resp.encrypted_login_token, TwoFactorPushType::TwoFaPushKeeper, Vec::new())
-                    .map(|()| eprintln!("Push notification sent. Approve on your device, then press Enter.")),
-                "3" | "2fs" | "2fa_send" => self
-                    .send_push(&resp.encrypted_login_token, TwoFactorPushType::TwoFaPushNone, Vec::new())
-                    .map(|()| eprintln!("2FA code sent. Enter it with 'c <code>'.")),
+                "2" | "kp" | "keeper_push" => {
+                    self.send_push(&resp.encrypted_login_token, TwoFactorPushType::TwoFaPushKeeper, Vec::new())
+                        .map(|()| eprintln!("Push notification sent. Approve on your device, then press Enter."))
+                }
+                "3" | "2fs" | "2fa_send" => {
+                    self.send_push(&resp.encrypted_login_token, TwoFactorPushType::TwoFaPushNone, Vec::new())
+                        .map(|()| eprintln!("2FA code sent. Enter it with 'c <code>'."))
+                }
                 s if s == "c" || s.starts_with("c ") => {
                     let code = match s.strip_prefix("c ") {
                         Some(code) => code.trim().to_owned(),
@@ -465,12 +479,19 @@ impl LoginFlow<'_> {
                         verification_code: code.clone(),
                         ..Default::default()
                     };
-                    let verified = unauthenticated_ok(&mut self.rest, "authentication/validate_device_verification_code", &email)
-                        .map(drop)
-                        .or_else(|_| {
-                            self.validate_2fa(&resp.encrypted_login_token, &code, TwoFactorValueType::TwoFaCodeNone, Vec::new(), TwoFactorExpiration::TwoFaExpImmediately)
+                    let verified =
+                        unauthenticated_ok(&mut self.rest, "authentication/validate_device_verification_code", &email)
+                            .map(drop)
+                            .or_else(|_| {
+                                self.validate_2fa(
+                                    &resp.encrypted_login_token,
+                                    &code,
+                                    TwoFactorValueType::TwoFaCodeNone,
+                                    Vec::new(),
+                                    TwoFactorExpiration::TwoFaExpImmediately,
+                                )
                                 .map(drop)
-                        });
+                            });
                     match verified {
                         Ok(()) => return Ok(true),
                         Err(_) => {
@@ -516,7 +537,9 @@ impl LoginFlow<'_> {
             expire_in: expire_in as i32,
             ..Default::default()
         };
-        let rs = TwoFactorValidateResponse::decode(unauthenticated_ok(&mut self.rest, "authentication/2fa_validate", &rq)?.as_slice())?;
+        let rs = TwoFactorValidateResponse::decode(
+            unauthenticated_ok(&mut self.rest, "authentication/2fa_validate", &rq)?.as_slice(),
+        )?;
         Ok(rs.encrypted_login_token)
     }
 
@@ -529,7 +552,9 @@ impl LoginFlow<'_> {
             .collect();
         if channels.is_empty() {
             if !resp.channels.is_empty() {
-                eprintln!("Your 2FA methods (e.g. security keys) are not supported here; falling back to backup codes.");
+                eprintln!(
+                    "Your 2FA methods (e.g. security keys) are not supported here; falling back to backup codes."
+                );
             }
             channels.push(TwoFactorChannelInfo {
                 channel_type: Ct::TwoFaCtBackup as i32,
@@ -548,7 +573,12 @@ impl LoginFlow<'_> {
             if selection == "q" {
                 return Err(Error::Cancelled);
             }
-            if let Some(c) = selection.parse::<usize>().ok().and_then(|i| i.checked_sub(1)).and_then(|i| channels.get(i)) {
+            if let Some(c) = selection
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| i.checked_sub(1))
+                .and_then(|i| channels.get(i))
+            {
                 break c.clone();
             }
             eprintln!("Invalid entry.");
@@ -556,7 +586,11 @@ impl LoginFlow<'_> {
         let (_, value_type) = channel_info(channel.channel_type).expect("filtered above");
 
         if channel.channel_type == Ct::TwoFaCtSms as i32 {
-            match self.send_push(&resp.encrypted_login_token, TwoFactorPushType::TwoFaPushSms, channel.channel_uid.clone()) {
+            match self.send_push(
+                &resp.encrypted_login_token,
+                TwoFactorPushType::TwoFaPushSms,
+                channel.channel_uid.clone(),
+            ) {
                 Ok(()) => eprintln!("SMS sent successfully."),
                 Err(_) => eprintln!("Was unable to send SMS."),
             }
@@ -576,7 +610,11 @@ impl LoginFlow<'_> {
             .collect();
         let mut duration = TwoFactorExpiration::TwoFaExpImmediately;
         let names: Vec<&str> = allowed.iter().map(|(n, _)| *n).collect();
-        eprintln!("\n2FA Code Duration: {}.\nTo change duration: 2fa_duration={}", duration_name(duration), names.join("|"));
+        eprintln!(
+            "\n2FA Code Duration: {}.\nTo change duration: 2fa_duration={}",
+            duration_name(duration),
+            names.join("|")
+        );
 
         loop {
             let answer = prompt("\nEnter 2FA Code: ")?;
@@ -593,7 +631,13 @@ impl LoginFlow<'_> {
             if answer.is_empty() {
                 continue;
             }
-            match self.validate_2fa(&resp.encrypted_login_token, &answer, value_type, channel.channel_uid.clone(), duration) {
+            match self.validate_2fa(
+                &resp.encrypted_login_token,
+                &answer,
+                value_type,
+                channel.channel_uid.clone(),
+                duration,
+            ) {
                 Ok(token) => {
                     eprintln!("2FA code verified.");
                     return Ok(token);
@@ -605,9 +649,14 @@ impl LoginFlow<'_> {
 
     fn finish(self, resp: LoginResponse) -> Result<Session> {
         let data_key = match EncryptedDataKeyType::try_from(resp.encrypted_data_key_type) {
-            Ok(EncryptedDataKeyType::ByDevicePublicKey) => crypto::decrypt_ec(&resp.encrypted_data_key, &self.device_key()?)?,
+            Ok(EncryptedDataKeyType::ByDevicePublicKey) => {
+                crypto::decrypt_ec(&resp.encrypted_data_key, &self.device_key()?)?
+            }
             Ok(EncryptedDataKeyType::ByPassword) => {
-                crypto::decrypt_encryption_params(&resp.encrypted_data_key, self.password.as_deref().unwrap_or_default())?
+                crypto::decrypt_encryption_params(
+                    &resp.encrypted_data_key,
+                    self.password.as_deref().unwrap_or_default(),
+                )?
             }
             Ok(EncryptedDataKeyType::ByAlternate) => {
                 let key = crypto::derive_keyhash_v2(
@@ -649,17 +698,19 @@ impl LoginFlow<'_> {
         let mut session = Session {
             rest: self.rest,
             user: resp.primary_username,
-            account_uid: resp.account_uid,
             session_token: resp.encrypted_session_token,
             data_key,
             rsa_key: None,
             ecc_key: None,
             summary: AccountSummaryElements::default(),
         };
-        let summary: AccountSummaryElements = session.call_typed("login/account_summary", &AccountSummaryRequest {
-            summary_version: 3,
-            ..Default::default()
-        })?;
+        let summary: AccountSummaryElements = session.call_typed(
+            "login/account_summary",
+            &AccountSummaryRequest {
+                summary_version: 3,
+                ..Default::default()
+            },
+        )?;
         if let Some(keys) = &summary.keys_info {
             if !keys.encrypted_private_key.is_empty() {
                 let der = crypto::decrypt_aes_v1(&keys.encrypted_private_key, &session.data_key)?;
