@@ -1,0 +1,13 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+
+min_version = "2026.8.16"
+
+# Rust comes from rustup via rust-toolchain.toml.
+[tools]
+mr-boxington = "latest"
+taplo = "latest"
+"cargo:cargo-make" = { version = "latest", locked = true }
+
+[env]
+# mbx is the compiler cache; a second rustc wrapper would bypass it.
+RUSTC_WRAPPER = false

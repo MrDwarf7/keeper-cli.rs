@@ -159,10 +159,22 @@ to include them.
 
 ## Development
 
+Install the development tools with [mise](https://mise.jdx.dev/):
+
+```bash
+mise install
+```
+
+Rust is managed by rustup through `rust-toolchain.toml`. Run the existing
+`cargo make` aliases from the repository root:
+
 ```bash
 cargo make A
 cargo make r -- --help
 ```
+
+If mise is not activated in your shell, prefix these commands with
+`mise exec --`.
 
 ## License
 
