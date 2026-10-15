@@ -15,23 +15,16 @@ pub struct Config {
     values: Map<String, Value>,
 }
 
-impl Config {
-    /// `--config`, then `KEEPER_CONFIG_FILE`, then `~/.keeper/keeper-cli.json`. The default is
-    /// deliberately not Commander's `config.json`: Commander may keep protected values in the OS
-    /// keychain, and this client must not overwrite that file with plaintext ones.
-    pub fn resolve_path(explicit: Option<&Path>) -> PathBuf {
-        if let Some(p) = explicit {
-            return p.to_path_buf();
-        }
-        if let Some(p) = std::env::var_os("KEEPER_CONFIG_FILE") {
-            return PathBuf::from(p);
-        }
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".keeper")
-            .join("keeper-cli.json")
-    }
+/// Deliberately not Commander's `config.json`: Commander may keep protected values in the OS
+/// keychain, and this client must not overwrite that file with plaintext ones.
+pub fn default_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".keeper")
+        .join("keeper-cli.json")
+}
 
+impl Config {
     pub fn load(path: PathBuf) -> Result<Self> {
         let values = match std::fs::read_to_string(&path) {
             Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)?,

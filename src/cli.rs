@@ -12,9 +12,9 @@ use clap::{Parser, Subcommand, ValueEnum};
     about = "Keeper Password Manager CLI (Rust port of Keeper Commander's core)"
 )]
 pub struct Cli {
-    /// Config file [default: ~/.keeper/keeper-cli.json]
-    #[arg(long, global = true, env = "KEEPER_CONFIG_FILE")]
-    pub config: Option<PathBuf>,
+    /// Config file
+    #[arg(long, global = true, env = "KEEPER_CONFIG_FILE", default_value_os_t = crate::config::default_path())]
+    pub config: PathBuf,
 
     /// Account email
     #[arg(long, global = true)]
@@ -71,10 +71,14 @@ pub enum Command {
         #[arg(short = 'R', long)]
         recursive:    bool,
         /// Folder path or UID, or a name filter for the current folder
-        pattern:      Option<String>,
+        #[arg(default_value_t, hide_default_value = true)]
+        pattern:      String,
     },
     /// Change current folder (shell only)
-    Cd { folder: Option<String> },
+    Cd {
+        #[arg(default_value = "/")]
+        folder: String,
+    },
     /// Display the folder structure
     Tree {
         /// Include records
@@ -83,7 +87,8 @@ pub enum Command {
         /// Show UIDs
         #[arg(short, long)]
         verbose: bool,
-        folder:  Option<String>,
+        #[arg(default_value = "/")]
+        folder:  String,
     },
     /// List records
     #[command(visible_alias = "l")]
@@ -96,7 +101,7 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format:      Format,
         /// Search terms; every term must match
-        pattern:     Option<String>,
+        pattern:     Vec<String>,
     },
     /// Search records, shared folders and teams
     #[command(visible_alias = "s")]
@@ -123,7 +128,7 @@ pub enum Command {
     ListSf {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format:  Format,
-        pattern: Option<String>,
+        pattern: Vec<String>,
     },
     /// List teams
     #[command(name = "list-team", visible_alias = "lt")]

@@ -93,19 +93,14 @@ impl App {
                 pattern,
             } => {
                 let cwd = self.cwd.clone();
-                ls(self.vault()?, &cwd, pattern.as_deref(), detail, folders_only, records_only, recursive);
+                ls(self.vault()?, &cwd, &pattern, detail, folders_only, records_only, recursive);
                 Ok(())
             }
             Command::Cd { folder } => {
                 let cwd = self.cwd.clone();
                 let vault = self.vault()?;
-                let target = match folder.as_deref() {
-                    None => String::new(),
-                    Some(path) => {
-                        resolve_folder(vault, &cwd, path)
-                            .ok_or_else(|| Error::Generic(format!("Invalid folder path: {path}")))?
-                    }
-                };
+                let target = resolve_folder(vault, &cwd, &folder)
+                    .ok_or_else(|| Error::Generic(format!("Invalid folder path: {folder}")))?;
                 println!("{}", vault.folder_path(&target));
                 self.cwd = target;
                 Ok(())
@@ -117,13 +112,8 @@ impl App {
             } => {
                 let cwd = self.cwd.clone();
                 let vault = self.vault()?;
-                let root = match folder.as_deref() {
-                    None => String::new(),
-                    Some(path) => {
-                        resolve_folder(vault, &cwd, path)
-                            .ok_or_else(|| Error::Generic(format!("Invalid folder path: {path}")))?
-                    }
-                };
+                let root = resolve_folder(vault, &cwd, &folder)
+                    .ok_or_else(|| Error::Generic(format!("Invalid folder path: {folder}")))?;
                 tree(vault, &root, records, verbose);
                 Ok(())
             }
@@ -133,11 +123,7 @@ impl App {
                 format,
                 pattern,
             } => {
-                let tokens: Vec<String> = pattern
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .map(str::to_owned)
-                    .collect();
+                let tokens = search_terms(&pattern);
                 let vault = self.vault()?;
                 let records: Vec<&Record> = vault
                     .records
@@ -164,17 +150,13 @@ impl App {
                 get(self.vault()?, &cwd, &uid, unmask, format)
             }
             Command::ListSf { format, pattern } => {
-                let tokens: Vec<String> = pattern
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .map(str::to_lowercase)
-                    .collect();
+                let tokens = search_terms(&pattern);
                 let vault = self.vault()?;
                 let rows: Vec<Vec<String>> = sorted_by_name(vault.shared_folders.values(), |sf| &sf.name)
                     .into_iter()
                     .filter(|sf| {
                         let hay = format!("{} {}", sf.uid, sf.name).to_lowercase();
-                        tokens.iter().all(|t| hay.contains(t))
+                        tokens.iter().all(|t| hay.contains(&t.to_lowercase()))
                     })
                     .map(|sf| vec![sf.uid.clone(), sf.name.clone()])
                     .collect();
@@ -536,20 +518,12 @@ fn print_records(mut records: Vec<&Record>, verbose: bool, format: Format) {
     output(&["record_uid", "type", "title", "description", "shared"], &rows, format);
 }
 
-fn ls(
-    vault: &Vault,
-    cwd: &str,
-    pattern: Option<&str>,
-    detail: bool,
-    folders_only: bool,
-    records_only: bool,
-    recursive: bool,
-) {
+fn ls(vault: &Vault, cwd: &str, pattern: &str, detail: bool, folders_only: bool, records_only: bool, recursive: bool) {
     // Like Commander, the argument is a folder path when it resolves to one, else a name filter.
-    let (folder, filter) = match pattern.map(|p| (p, resolve_folder(vault, cwd, p))) {
-        Some((_, Some(f))) => (f, None),
-        Some((p, None)) => (cwd.to_owned(), Some(p.to_lowercase())),
-        None => (cwd.to_owned(), None),
+    // An empty pattern resolves to the current folder and an empty filter keeps everything.
+    let (folder, filter) = match resolve_folder(vault, cwd, pattern) {
+        Some(f) => (f, String::new()),
+        None => (cwd.to_owned(), pattern.to_lowercase()),
     };
     let mut queue = vec![folder];
     let mut first = true;
@@ -561,7 +535,7 @@ fn ls(
             println!("{}:", vault.folder_path(&folder));
         }
         first = false;
-        let keep = |name: &str| filter.as_ref().is_none_or(|f| name.to_lowercase().contains(f));
+        let keep = |name: &str| name.to_lowercase().contains(&filter);
         let folders: Vec<&String> = vault
             .subfolders_of(&folder)
             .iter()
@@ -647,12 +621,18 @@ fn tree(vault: &Vault, root: &str, records: bool, verbose: bool) {
     walk(vault, root, "", records, &label);
 }
 
-fn search(vault: &Vault, pattern: &[String], verbose: bool, format: Format) {
-    let tokens: Vec<String> = pattern
+/// Terms may arrive as separate arguments or as one quoted string; either way every word must
+/// match, in any order.
+fn search_terms(pattern: &[String]) -> Vec<String> {
+    pattern
         .iter()
         .flat_map(|p| p.split_whitespace())
         .map(str::to_owned)
-        .collect();
+        .collect()
+}
+
+fn search(vault: &Vault, pattern: &[String], verbose: bool, format: Format) {
+    let tokens = search_terms(pattern);
     let records: Vec<&Record> = vault.records.values().filter(|r| r.matches(&tokens)).collect();
     let hit = |text: &str| {
         let text = text.to_lowercase();

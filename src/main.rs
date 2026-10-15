@@ -33,7 +33,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let mut config = config::Config::load(config::Config::resolve_path(cli.config.as_deref()))?;
+    let mut config = config::Config::load(cli.config)?;
     if let Some(server) = cli.server {
         config.set("server", Some(server));
     }
