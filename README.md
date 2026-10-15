@@ -1,30 +1,9 @@
-<!-- PROJECT LOGO / BANNER -->
-<p align="center">
-  <img src="assets/README-header.png" alt="keeper-cli" width="100%">
-</p>
+# keeper-cli
 
-<p align="center">
-  <img src="assets/icon-128.png" alt="keeper-cli icon" width="64">
-</p>
-
-<p align="center">
-  <strong>keeper-cli</strong>: a Rust command line client for the Keeper password vault
-  <br>
-  <a href="https://crates.io/crates/keeper-cli"><img src="https://img.shields.io/crates/v/keeper-cli" alt="crates.io"></a>
-  <a href="https://github.com/mrdwarf7/keeper-cli.rs/actions/workflows/build.yml"><img src="https://github.com/mrdwarf7/keeper-cli.rs/actions/workflows/build.yml/badge.svg" alt="build"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
-  <a href="https://github.com/mrdwarf7/keeper-cli.rs/releases"><img src="https://img.shields.io/github/v/release/mrdwarf7/keeper-cli.rs" alt="release"></a>
-</p>
-
-## keeper-cli
-
-keeper-cli is a Rust rebuild of the core of
-[Keeper Commander](https://github.com/Keeper-Security/Commander), the Python CLI
-for the Keeper password manager. It logs in, downloads and decrypts your vault,
-and lets you browse and read it. It does not write anything back to the vault.
-
-Command names, aliases and the config key names follow Commander, so the
-commands you know carry over.
+keeper-cli is a Rust command-line client for Keeper, based on the core of
+[Keeper Commander](https://github.com/Keeper-Security/Commander). It logs in,
+syncs and decrypts the vault locally, supports common read and write workflows,
+and runs either one command at a time or as an interactive shell.
 
 ```bash
 keeper-cli login you@example.com
@@ -34,38 +13,31 @@ keeper-cli get "Work/GitHub" --unmask
 
 ## Installation
 
-Build from source. The repo pins the nightly toolchain in `rust-toolchain.toml`,
-so `rustup` picks it up on its own.
+Build from source with the repository's pinned nightly toolchain:
 
 ```bash
-git clone https://github.com/mrdwarf7/keeper-cli.rs
 cd keeper-cli.rs
 cargo install --path .
 ```
 
-No `protoc` is needed. `build.rs` compiles the checked-in `proto/keeper.fds.bin`
-with `prost-build`.
-
 ## Usage
 
-Run a single command, or start the shell. With no command, `keeper-cli` opens
-the shell.
+Run a command directly or start the interactive shell. With no command,
+`keeper-cli` opens the shell. A one-shot command logs in and syncs the whole
+vault before running. The shell keeps the session and vault between commands.
 
 ```bash
-# One-shot: logs in, syncs the vault, runs the command, exits
 keeper-cli list --format json
+keeper-cli record-add --title "Example login" --record-type login login=demo
+keeper-cli record-update --record "Example login" login=demo-user
+keeper-cli append-notes --notes "Rotated during maintenance" "Example login"
+keeper-cli mkdir Work
 keeper-cli totp "My Bank"
-
-# Interactive shell: log in and sync once, then run many commands
 keeper-cli shell
 ```
 
-Every one-shot run logs in and does a full vault sync first. Nothing is cached
-between runs, so for scripts either enable persistent login (below) or pass
-`--password` / `KEEPER_PASSWORD`.
-
-Inside the shell, `cd` changes the current folder and the prompt follows it.
-`help` lists commands and `exit` (or `quit`, or Ctrl-D) leaves.
+Inside the shell, `cd` changes the current folder. `help` lists commands;
+`exit`, `quit` or Ctrl-D leaves the shell.
 
 ```text
 My Vault> tree -r
@@ -75,121 +47,105 @@ Work> get GitHub
 Work> exit
 ```
 
-### Global options
+### Common commands
 
-These work with every command.
+| Command                                               | Alias             | Description                                                         |
+| ----------------------------------------------------- | ----------------- | ------------------------------------------------------------------- |
+| `login [EMAIL]`, `logout`, `whoami`, `sync-down`      |                   | Sign in, clear the session, show the account, or sync the vault     |
+| `ls`, `cd`, `tree`                                    |                   | Browse folders and records                                          |
+| `list`, `search`, `get`                               | `l`, `s`, `g`     | Find and inspect vault items; `get --unmask` reveals hidden fields  |
+| `list-sf`, `list-team`, `totp`                        | `lsf`, `lt`       | Show shared folders, teams, or TOTP codes                           |
+| `record-add`, `record-update`, `append-notes`, `rm`   | `ra`, `ru`, `an`  | Add or change records, append notes, or remove records/folder links |
+| `mkdir`, `rmdir`, `rndir`, `mv`                       |                   | Create, remove, rename, or move folders and records                 |
+| `upload-attachment`, `download-attachment`            | `ua`, `da`        | Transfer record attachments                                         |
+| `clipboard-copy`, `find-password`                     | `cc`              | Copy a record field or print its password                           |
+| `generate`                                            |                   | Generate passwords without logging in                               |
+| `this-device`, `this-device persistent-login on\|off` | `pl` (subcommand) | View device settings or manage persistent login                     |
+| `shell`                                               |                   | Start the interactive shell                                         |
 
-| Option                  | Env var              | Description                                       |
-| ----------------------- | -------------------- | ------------------------------------------------- |
-| `--config <CONFIG>`     | `KEEPER_CONFIG_FILE` | Config file (default: see Configuration)          |
-| `--user <USER>`         |                      | Account email                                     |
-| `--password <PASSWORD>` | `KEEPER_PASSWORD`    | Master password; prompted for when omitted        |
-| `--server <SERVER>`     |                      | Keeper region host, e.g. `keepersecurity.eu`      |
+`list`, `search`, `list-sf`, and `list-team` support `--format table|json`;
+`get` supports `--format detail|json`. `generate` also supports table or JSON
+output. Write commands that take secret values can prompt for them; avoid
+putting passwords or other secrets directly in command arguments, where they may
+be saved in shell history or visible to other local processes.
 
-### Commands
+### Login
 
-| Command                                                                                          | Alias | Description                                                                                                                                                      |
-| ------------------------------------------------------------------------------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `login [EMAIL]`                                                                                  |       | Log in and remember the account in the config                                                                                                                    |
-| `logout`                                                                                         |       | End the session and forget this device's persistent login                                                                                                        |
-| `whoami [-v]`                                                                                    |       | Show the logged-in account                                                                                                                                       |
-| `sync-down`                                                                                      |       | Download and decrypt the vault again                                                                                                                             |
-| `ls [PATTERN] [-l] [-f] [-r] [-R]`                                                               |       | List folder contents. `-l` detailed table, `-f` folders only, `-r` records only, `-R` recurse                                                                    |
-| `cd [FOLDER]`                                                                                    |       | Change the current folder (shell only)                                                                                                                           |
-| `tree [FOLDER] [-r] [-v]`                                                                        |       | Show the folder structure. `-r` includes records, `-v` shows UIDs                                                                                                |
-| `list [PATTERN]... [-t TYPE] [-v] [--format table\|json]`                                        | `l`   | List records. Every search term must match; `-t` is repeatable                                                                                                   |
-| `search [PATTERN]... [-v] [--format table\|json]`                                                | `s`   | Search records, shared folders and teams                                                                                                                         |
-| `get <UID> [--unmask] [--format detail\|json]`                                                   | `g`   | Show a record, folder, shared folder or team by UID, or a record by path or title. Hidden fields are masked unless you pass `--unmask`                           |
-| `list-sf [PATTERN]... [--format table\|json]`                                                    | `lsf` | List shared folders                                                                                                                                              |
-| `list-team [--format table\|json]`                                                               | `lt`  | List teams                                                                                                                                                       |
-| `totp [RECORD] [--details]`                                                                      |       | Show the current TOTP code of a record, or list the records that have one                                                                                        |
-| `generate [-c LENGTH] [-n NUMBER] [-r RULES] [-u N] [-l N] [-d N] [-s N] [--format table\|json]` |       | Generate passwords. `-r` takes `"[length,] upper, lower, digits, symbols"` minimum counts; `-u`, `-l`, `-d` and `-s` set one class, and `0` turns that class off |
-| `this-device`                                                                                    |       | Show this device's login settings                                                                                                                                |
-| `this-device register`                                                                           |       | Store an encrypted copy of the data key for this device                                                                                                          |
-| `this-device persistent-login on\|off`                                                           | `pl`  | Turn "Stay Logged In" on or off                                                                                                                                  |
-| `shell`                                                                                          |       | Start the interactive shell                                                                                                                                      |
-
-`generate` does not need a login.
-
-### Login prompts
-
-`login` handles the master password, 2FA (TOTP, SMS, Duo, RSA, Keeper DNA or a
-backup code), device approval (email link, Keeper push, or a code), and region
-redirects. Prompts go to stderr; command output goes to stdout.
-
-### Running without the master password
-
-Commander's "Stay Logged In" works here too. Log in once, then turn it on:
+Login supports master-password authentication, TOTP, SMS, Duo, RSA, Keeper DNA
+and backup codes, device approval, region redirects, and persistent login.
+Prompts go to stderr and command output goes to stdout. To keep a device signed
+in, enable persistent login after signing in:
 
 ```bash
 keeper-cli login you@example.com
 keeper-cli this-device persistent-login on
 ```
 
-Later runs resume from the device's clone code in the config file and skip the
-password prompt. `keeper-cli logout` clears the clone code. An administrator
-policy can forbid this; the command reports that when it happens.
+Later invocations use the stored clone code until `logout` clears it. An
+administrator policy can disable persistent login.
+
+### Global options
+
+| Option                  | Environment variable | Description                                         |
+| ----------------------- | -------------------- | --------------------------------------------------- |
+| `--config <PATH>`       | `KEEPER_CONFIG_FILE` | Config file path                                    |
+| `--user <EMAIL>`        | `KEEPER_USER`        | Account email                                       |
+| `--password <PASSWORD>` | `KEEPER_PASSWORD`    | Master password; prompted for when omitted          |
+| `--server <HOST>`       | `KEEPER_SERVER`      | Keeper region host, for example `keepersecurity.eu` |
+
+Treat command-line and environment values as secrets. Prefer interactive prompts
+when possible.
 
 ## Configuration
 
-keeper-cli reads and writes one JSON file, `config.json` in the platform config
-directory: `~/.config/keeper-cli/` on Linux, `~/Library/Application
-Support/keeper-cli/` on macOS, `%APPDATA%\keeper-cli\` on Windows. Override the
-path with `--config` or `KEEPER_CONFIG_FILE`.
+The JSON configuration file is stored in the platform config directory. On
+macOS, the default is `~/Library/Application Support/keeper-cli/config.json`;
+Linux and Windows use their standard application config directories. Set
+`--config` or `KEEPER_CONFIG_FILE` to choose another path.
 
-| Key            | Meaning                                          |
-| -------------- | ------------------------------------------------ |
-| `user`         | Account email, set by `login`                    |
-| `server`       | Keeper region host, default `keepersecurity.com` |
-| `device_token` | This device's registration token                 |
-| `private_key`  | This device's EC private key                     |
-| `clone_code`   | Persistent-login token; removed by `logout`      |
+The configuration includes account and device login settings such as `user`,
+`server`, `device_token`, `private_key`, and `clone_code`. `KEEPER_<KEY>`
+environment variables override file values. The file uses Commander's
+file-storage key names, but is separate from Commander's config file. To reuse
+a Commander device, select a config saved with `config_storage: "file"`.
 
-These are Commander's file-storage key names, but the file is deliberately not
-Commander's `config.json`. Commander can keep protected values in the OS
-keychain, and keeper-cli must not overwrite that file with plaintext ones. To
-reuse a Commander device, point `--config` at a config saved with
-`config_storage: "file"`. Unknown keys are kept when the file is saved.
+## Implemented baseline and limits
 
-Each key can also come from a `KEEPER_<KEY>` environment variable, which wins
-over the file: `KEEPER_USER`, `KEEPER_SERVER`, `KEEPER_DEVICE_TOKEN`,
-`KEEPER_PRIVATE_KEY`, `KEEPER_CLONE_CODE`. An override is written to the file
-the next time keeper-cli saves it, for example after a login.
+Record and folder changes, attachment transfer, and clipboard/password commands
+are implemented. The vault sync is a full download each time; it does not use
+incremental history.
 
-The file holds the device private key and clone code, so on Unix it is written
-with mode `0600`.
+These features are not implemented:
 
-## Not implemented
-
-- SSO login. SSO accounts fall back to their alternate master password, as in
-  Commander.
-- WebAuthn / FIDO security-key 2FA
-- Passkey and biometric login
-- Account recovery
-- The ML-KEM ("QRC") transport. Requests use the classic transmission-key
+- SSO, WebAuthn/FIDO security keys, passkeys, biometrics, and account recovery.
+- PAM, enterprise administration, and other admin commands.
+- Vault history and point-in-time restore.
+- v2 attachment upload. Attachment upload is limited to supported typed records.
+- BreachWatch and sharing-management commands.
+- The ML-KEM ("QRC") transport. Requests use classic transmission-key
   encryption.
-- Any vault write: `record-add`, `record-edit`, `rm`, `mkdir`, `mv`, sharing
-- Attachments
-- Enterprise and admin commands
-- PAM
-- BreachWatch
-- Incremental sync. Every sync downloads the whole vault.
+- Incremental sync; each sync downloads the full vault.
 
-## Regenerating the protobuf descriptors
+## Verification status
 
-Keeper publishes no `.proto` files. Commander ships protoc-generated `*_pb2.py`
-modules, and each one embeds its serialized descriptor.
-`tools/extract-protos.ts` lifts those bytes into `proto/keeper.fds.bin`, which
-`build.rs` compiles.
+No authenticated live Keeper account was supplied for this project. Tests and
+local HTTP fixtures are available for protocol and command behavior, but
+production vault operations have not been verified against a real account.
+
+## Regenerating protobuf descriptors
+
+This checkout of Commander contains protoc-generated `*_pb2.py` modules rather
+than the corresponding `.proto` files. They embed serialized descriptors. The
+extraction script builds `proto/keeper.fds.bin`, which `build.rs` compiles.
 
 ```bash
 git clone --depth 1 https://github.com/Keeper-Security/Commander /tmp/commander
 bun tools/extract-protos.ts /tmp/commander
 ```
 
-By default it starts from `APIRequest.proto`, `SyncDown.proto` and
+By default, the script starts from `APIRequest.proto`, `SyncDown.proto`, and
 `AccountSummary.proto`. Pass other root `.proto` names after the checkout path
-to include more.
+to include them.
 
 ## Development
 
@@ -201,4 +157,5 @@ cargo run -- --help
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE) for the project license and
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for Keeper Commander's notice.
