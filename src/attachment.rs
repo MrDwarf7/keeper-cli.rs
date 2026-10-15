@@ -1243,4 +1243,167 @@ mod tests {
         assert_eq!(upload.record, "REC");
         assert!(ShellLine::try_parse_from(["upload-attachment", "REC"]).is_err(), "at least one --file");
     }
+
+    /// Answers the first request on localhost with `status` and `reply`, then hands back the whole
+    /// request (head and body) it received.
+    fn serve_once(status: &'static str, reply: Vec<u8>) -> (String, std::thread::JoinHandle<Vec<u8>>) {
+        use std::io::Write as _;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/blob", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+                    Err(e) => panic!("no client connected: {e}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 16 * 1024];
+            let mut total = None;
+            while total.is_none_or(|total| request.len() < total) {
+                let read = stream.read(&mut chunk).unwrap();
+                assert!(read > 0, "client hung up mid-request");
+                request.extend_from_slice(&chunk[..read]);
+                if total.is_none()
+                    && let Some(head_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                {
+                    let head = String::from_utf8_lossy(&request[..head_end]).to_lowercase();
+                    let length: usize = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .map_or(0, |length| length.trim().parse().unwrap());
+                    total = Some(head_end + 4 + length);
+                }
+            }
+            write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", reply.len())
+                .unwrap();
+            stream.write_all(&reply).unwrap();
+            request
+        });
+        (url, server)
+    }
+
+    #[test]
+    fn download_fetches_decrypts_and_writes_only_authentic_content() {
+        let dir = temp_dir();
+        let path = dir.join("out.bin");
+        let http = Client::builder().no_proxy().build().unwrap();
+        let key = [8u8; 32];
+        let plain: Vec<u8> = (0..=255u8).cycle().take(70_000).collect();
+
+        for (cipher, sealed) in [
+            (Cipher::Gcm, crypto::encrypt_aes_v2(&plain, &key).unwrap()),
+            (Cipher::Cbc, crypto::encrypt_aes_v1(&plain, &key).unwrap()),
+        ] {
+            let (url, server) = serve_once("200 OK", sealed);
+            download(&http, &Ticket { url, cipher }, &key, &path).unwrap();
+            let request = String::from_utf8(server.join().unwrap()).unwrap();
+            assert!(request.starts_with("GET /blob HTTP/1.1\r\n"), "{request}");
+            assert_eq!(std::fs::read(&path).unwrap(), plain, "{cipher:?}");
+            std::fs::remove_file(&path).unwrap();
+        }
+
+        let (url, server) = serve_once("403 Forbidden", b"<Error>denied</Error>".to_vec());
+        let denied = download(
+            &http,
+            &Ticket {
+                url,
+                cipher: Cipher::Gcm,
+            },
+            &key,
+            &path,
+        )
+        .unwrap_err();
+        assert!(denied.to_string().contains("403"), "{denied}");
+        server.join().unwrap();
+
+        let mut forged = crypto::encrypt_aes_v2(&plain, &key).unwrap();
+        forged[100] ^= 1;
+        let (url, server) = serve_once("200 OK", forged);
+        assert!(
+            download(
+                &http,
+                &Ticket {
+                    url,
+                    cipher: Cipher::Gcm
+                },
+                &key,
+                &path
+            )
+            .is_err()
+        );
+        server.join().unwrap();
+        assert!(!path.exists(), "nothing is written for a refused or forged download");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn upload_posts_one_multipart_form_whose_file_part_decrypts_with_the_file_key() {
+        let dir = temp_dir();
+        let content: Vec<u8> = (0..=255u8).cycle().take(50_000).collect();
+        std::fs::write(dir.join("report.pdf"), &content).unwrap();
+        let file = LocalFile::try_from(&UserPath(dir.join("report.pdf"))).unwrap();
+        let new = NewFile {
+            uid: vec![5; 16],
+            key: vec![9; 32],
+        };
+        let http = Client::builder().no_proxy().build().unwrap();
+
+        let (url, server) = serve_once("201 Created", Vec::new());
+        let target = FileAddStatus {
+            url,
+            parameters: r#"{"key": "uploads/abc", "policy": "p"}"#.into(),
+            success_status_code: 201,
+            ..FileAddStatus::default()
+        };
+        send(&http, &target, &file, &new).unwrap();
+        let request = server.join().unwrap();
+
+        let head_end = request.windows(4).position(|window| window == b"\r\n\r\n").unwrap() + 4;
+        let head = String::from_utf8(request[..head_end].to_vec()).unwrap().to_lowercase();
+        let header = |name: &str| {
+            head.lines()
+                .find_map(|line| line.strip_prefix(&format!("{name}: ")))
+                .map(str::to_owned)
+                .unwrap()
+        };
+        let boundary = header("content-type")
+            .strip_prefix("multipart/form-data; boundary=")
+            .unwrap()
+            .to_owned();
+        let body = &request[head_end..];
+        assert!(head.starts_with("post /blob http/1.1\r\n"), "{head}");
+        assert_eq!(header("content-length"), body.len().to_string());
+
+        let file_ref = b64_encode(&new.uid);
+        let before_file = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nuploads/abc\r\n\
+             --{boundary}\r\nContent-Disposition: form-data; name=\"policy\"\r\n\r\np\r\n\
+             --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_ref}\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n"
+        );
+        let after_file = format!("\r\n--{boundary}--\r\n");
+        assert!(body.starts_with(before_file.as_bytes()));
+        assert!(body.ends_with(after_file.as_bytes()));
+        let sealed = &body[before_file.len()..body.len() - after_file.len()];
+        assert_eq!(crypto::decrypt_aes_v2(sealed, &new.key).unwrap(), content);
+
+        let (url, server) = serve_once("200 OK", Vec::new());
+        let target = FileAddStatus {
+            url,
+            parameters: "{}".into(),
+            success_status_code: 201,
+            ..FileAddStatus::default()
+        };
+        let wrong = send(&http, &target, &file, &new).unwrap_err();
+        assert!(wrong.to_string().contains("HTTP status code 200"), "{wrong}");
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
