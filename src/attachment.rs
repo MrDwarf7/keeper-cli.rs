@@ -396,14 +396,20 @@ fn destination(vault: &Vault, out_dir: &Path, layout: Layout, record: &Record) -
     }
 }
 
-/// The name a file is saved under. Only the last component of the stored name survives, so a
-/// hostile attachment name cannot write outside the output folder.
-fn local_name(attachment: &Attachment, record: &Record, naming: Naming) -> String {
-    let stored = Path::new(&attachment.name)
+/// The last path component of untrusted text: the only part of it fit to name a file.
+fn last_component(text: &str) -> Option<&str> {
+    Path::new(text)
         .file_name()
         .and_then(OsStr::to_str)
         .filter(|name| !name.is_empty())
-        .unwrap_or(&attachment.id);
+}
+
+/// The name a file is saved under. Only a last path component of the stored name (or, failing
+/// that, of the file id) survives, so a hostile attachment cannot write outside the output folder.
+fn local_name(attachment: &Attachment, record: &Record, naming: Naming) -> String {
+    let stored = last_component(&attachment.name)
+        .or_else(|| last_component(&attachment.id))
+        .unwrap_or("attachment");
     match naming {
         Naming::Stored => stored.to_owned(),
         Naming::WithRecordTitle => {
@@ -434,6 +440,7 @@ fn free_path(dir: &Path, name: &str, record_uid: &str, file_id: &str) -> PathBuf
         .and_then(OsStr::to_str)
         .map(|e| format!(".{e}"))
         .unwrap_or_default();
+    let file_id = last_component(file_id).unwrap_or("file");
     let with_record = dir.join(format!("{stem}({record_uid}){extension}"));
     if with_record.is_file() {
         dir.join(format!("{stem}({file_id}){extension}"))
@@ -980,6 +987,16 @@ mod tests {
         assert_eq!(local_name(&attachment("key.pem"), &titled, Naming::WithRecordTitle), "My Server1-key.pem");
         let untitled = record("R", 3, json!({"title": "***"}), 1);
         assert_eq!(local_name(&attachment("key.pem"), &untitled, Naming::WithRecordTitle), "key.pem");
+
+        // A legacy attachment's id is whatever the record's owner wrote there
+        let hostile = |name: &str, id: &str| {
+            Attachment {
+                id: id.into(),
+                ..attachment(name)
+            }
+        };
+        assert_eq!(local_name(&hostile("", "../../etc/shadow"), &titled, Naming::Stored), "shadow");
+        assert_eq!(local_name(&hostile("..", ".."), &titled, Naming::Stored), "attachment");
     }
 
     #[test]
@@ -992,6 +1009,13 @@ mod tests {
         assert_eq!(free_path(&dir, "a.tar.gz", "REC", "FILE"), dir.join("a.tar(FILE).gz"));
         std::fs::write(dir.join("README"), b"x").unwrap();
         assert_eq!(free_path(&dir, "README", "REC", "FILE"), dir.join("README(REC)"));
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        std::fs::write(dir.join("a(REC).txt"), b"x").unwrap();
+        assert_eq!(
+            free_path(&dir, "a.txt", "REC", "../../x"),
+            dir.join("a(x).txt"),
+            "a hostile id stays in the folder"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
