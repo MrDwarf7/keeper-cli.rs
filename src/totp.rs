@@ -1,47 +1,98 @@
 //! RFC 6238 codes from `otpauth://totp/...` URLs stored in records.
 
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
 
 use crate::prelude::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Algorithm {
+    #[default]
+    Sha1,
+    Sha256,
+    Sha512,
+}
+
+impl FromStr for Algorithm {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.to_ascii_uppercase().as_str() {
+            "SHA1" => Ok(Self::Sha1),
+            "SHA256" => Ok(Self::Sha256),
+            "SHA512" => Ok(Self::Sha512),
+            _ => Err(Error::Generic(format!("unsupported TOTP algorithm {value}"))),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Code {
+    value:         String,
+    pub remaining: u64,
+}
+
+impl Display for Code {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.value)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Totp {
     secret:    Vec<u8>,
-    algorithm: String,
+    algorithm: Algorithm,
     digits:    u32,
     period:    u64,
 }
 
-impl Totp {
-    pub fn parse(url: &str) -> Result<Self> {
-        let query = url
-            .strip_prefix("otpauth://")
-            .and_then(|rest| rest.split_once('?'))
-            .map(|(_, q)| q)
-            .ok_or_else(|| Error::Generic("not an otpauth:// URL".into()))?;
+impl FromStr for Totp {
+    type Err = Error;
+
+    fn from_str(source: &str) -> Result<Self> {
+        let url = reqwest::Url::parse(source).map_err(|_| Error::Generic("not an otpauth://totp URL".into()))?;
+        if url.scheme() != "otpauth" || url.host_str() != Some("totp") {
+            return Err(Error::Generic("not an otpauth://totp URL".into()));
+        }
         let mut totp = Self {
             secret:    Vec::new(),
-            algorithm: "SHA1".into(),
+            algorithm: Algorithm::default(),
             digits:    6,
             period:    30,
         };
-        for (key, value) in query.split('&').filter_map(|kv| kv.split_once('=')) {
+        for (key, value) in url.query_pairs() {
             match key.to_ascii_lowercase().as_str() {
                 "secret" => {
-                    let normalized: String = value
+                    let normalized = value
                         .chars()
                         .filter(|c| !matches!(c, ' ' | '=' | '-'))
-                        .collect::<String>()
-                        .to_ascii_uppercase();
+                        .map(|c| c.to_ascii_uppercase())
+                        .collect::<String>();
                     totp.secret = data_encoding::BASE32_NOPAD
                         .decode(normalized.as_bytes())
                         .map_err(|e| Error::Generic(format!("invalid TOTP secret: {e}")))?;
                 }
-                "algorithm" => totp.algorithm = value.to_ascii_uppercase(),
-                "digits" => totp.digits = value.parse().unwrap_or(6),
-                "period" => totp.period = value.parse().ok().filter(|&p| p > 0).unwrap_or(30),
+                "algorithm" => totp.algorithm = value.parse()?,
+                "digits" => {
+                    totp.digits = value
+                        .parse()
+                        .map_err(|_| Error::Generic("invalid TOTP digits".into()))?;
+                    if !(1..=10).contains(&totp.digits) {
+                        return Err(Error::Generic("TOTP digits must be between 1 and 10".into()));
+                    }
+                }
+                "period" => {
+                    totp.period = value
+                        .parse()
+                        .map_err(|_| Error::Generic("invalid TOTP period".into()))?;
+                    if totp.period == 0 {
+                        return Err(Error::Generic("TOTP period must be nonzero".into()));
+                    }
+                }
                 _ => {}
             }
         }
@@ -50,15 +101,16 @@ impl Totp {
         }
         Ok(totp)
     }
+}
 
+impl Totp {
     /// Returns the code for `unix_time` and the seconds it remains valid.
-    pub fn code_at(&self, unix_time: u64) -> Result<(String, u64)> {
+    pub fn code_at(&self, unix_time: u64) -> Result<Code> {
         let counter = (unix_time / self.period).to_be_bytes();
-        let digest = match self.algorithm.as_str() {
-            "SHA1" => hmac::<Hmac<Sha1>>(&self.secret, &counter),
-            "SHA256" => hmac::<Hmac<Sha256>>(&self.secret, &counter),
-            "SHA512" => hmac::<Hmac<Sha512>>(&self.secret, &counter),
-            other => return Err(Error::Generic(format!("unsupported TOTP algorithm {other}"))),
+        let digest = match self.algorithm {
+            Algorithm::Sha1 => hmac::<Hmac<Sha1>>(&self.secret, &counter),
+            Algorithm::Sha256 => hmac::<Hmac<Sha256>>(&self.secret, &counter),
+            Algorithm::Sha512 => hmac::<Hmac<Sha512>>(&self.secret, &counter),
         };
         let offset = (digest[digest.len() - 1] & 0x0f) as usize;
         let binary = u32::from_be_bytes([
@@ -68,10 +120,13 @@ impl Totp {
             digest[offset + 3],
         ]);
         let code = u64::from(binary) % 10u64.pow(self.digits);
-        Ok((format!("{code:0width$}", width = self.digits as usize), self.period - unix_time % self.period))
+        Ok(Code {
+            value:     format!("{code:0width$}", width = self.digits as usize),
+            remaining: self.period - unix_time % self.period,
+        })
     }
 
-    pub fn code_now(&self) -> Result<(String, u64)> {
+    pub fn code_now(&self) -> Result<Code> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| Error::Generic(e.to_string()))?
@@ -85,7 +140,6 @@ fn hmac<M: Mac + hmac::digest::KeyInit>(key: &[u8], msg: &[u8]) -> Vec<u8> {
     mac.update(msg);
     mac.finalize().into_bytes().to_vec()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,21 +170,42 @@ mod tests {
                 [(59, "90693936"), (1111111109, "25091201"), (20000000000, "47863826")],
             ),
         ];
-        for (alg, secret, vectors) in cases {
-            let totp = Totp::parse(&url(secret, alg)).unwrap();
-            for (t, expected) in vectors {
-                assert_eq!(totp.code_at(t).unwrap().0, expected, "{alg} at {t}");
+        for (algorithm, secret, vectors) in cases {
+            let totp = url(secret, algorithm).parse::<Totp>().unwrap();
+            for (time, expected) in vectors {
+                assert_eq!(totp.code_at(time).unwrap().to_string(), expected, "{algorithm} at {time}");
             }
         }
     }
 
     #[test]
     fn defaults_lowercase_secret_and_remaining_window() {
-        let totp = Totp::parse("otpauth://totp/x?secret=gezdgnbvgy3tqojqgezdgnbvgy3tqojq").unwrap();
-        let (code, remaining) = totp.code_at(59).unwrap();
-        assert_eq!(code.len(), 6);
-        assert_eq!(remaining, 1);
-        assert!(Totp::parse("https://example.com").is_err());
-        assert!(Totp::parse("otpauth://totp/x?issuer=a").is_err());
+        let totp = "otpauth://totp/x?secret=gezdgnbvgy3tqojqgezdgnbvgy3tqojq"
+            .parse::<Totp>()
+            .unwrap();
+        let code = totp.code_at(59).unwrap();
+        assert_eq!(code.to_string().len(), 6);
+        assert_eq!(code.remaining, 1);
+        assert!("https://example.com".parse::<Totp>().is_err());
+        assert!("otpauth://totp/x?issuer=a".parse::<Totp>().is_err());
+    }
+
+    #[test]
+    fn query_values_are_decoded_and_base32_is_lenient() {
+        let totp = "otpauth://totp/x?secret=gezd%20gnbv-gy3tqojqgezdgnbvgy3tqojq%3D%3D&algorithm=sha%32%35%36"
+            .parse::<Totp>()
+            .unwrap();
+        assert_eq!(totp.algorithm, Algorithm::Sha256);
+    }
+
+    #[test]
+    fn invalid_digits_and_period_are_rejected() {
+        let base = "otpauth://totp/x?secret=gezdgnbvgy3tqojq";
+        for digits in ["nope", "0", "11"] {
+            assert!(format!("{base}&digits={digits}").parse::<Totp>().is_err());
+        }
+        for period in ["nope", "0"] {
+            assert!(format!("{base}&period={period}").parse::<Totp>().is_err());
+        }
     }
 }

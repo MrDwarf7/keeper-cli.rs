@@ -1,10 +1,7 @@
-//! Persistent settings, using Commander's file-storage key names (`user`, `server`,
-//! `device_token`, `private_key`, `clone_code`) so a Commander config saved with
-//! `config_storage: "file"` can be pointed at directly. Each key can be overridden by a
-//! `KEEPER_<KEY>` environment variable; an override is saved like any other value when the client
-//! next writes the file (e.g. after login). Keys this client doesn't know are kept and written back.
+//! Persistent Commander-compatible settings with environment overrides.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -13,9 +10,6 @@ use crate::prelude::*;
 
 pub const DEFAULT_SERVER: &str = "keepersecurity.com";
 
-/// The platform config directory (e.g. `~/.config/keeper-cli/config.json` on Linux). Not
-/// Commander's `~/.keeper/config.json`: Commander may keep protected values in the OS keychain,
-/// and this client must not overwrite that file with plaintext ones.
 pub fn default_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -26,55 +20,66 @@ pub fn default_path() -> PathBuf {
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Settings {
     #[serde(skip)]
-    path:             PathBuf,
-    /// The file's other keys, read straight from disk so environment variables never leak in.
+    pub path:             PathBuf,
     #[serde(skip)]
-    other:            Map<String, Value>,
+    other:                Map<String, Value>,
+    #[serde(skip)]
+    pub(crate) file_user: Option<String>,
     #[serde(default)]
-    pub user:         Option<String>,
+    pub user:             Option<String>,
     #[serde(default)]
-    pub server:       Option<String>,
+    pub server:           Option<String>,
     #[serde(default)]
-    pub device_token: Option<String>,
-    /// The device's P-256 private key; Commander's name for it on disk.
+    pub device_token:     Option<String>,
     #[serde(default)]
-    pub private_key:  Option<String>,
-    /// Resumes a "Stay Logged In" session without the master password.
+    pub private_key:      Option<String>,
     #[serde(default)]
-    pub clone_code:   Option<String>,
+    pub clone_code:       Option<String>,
 }
 
 impl Settings {
-    /// A missing file is an empty configuration, as on first run.
+    /// Read only the requested path, then layer `KEEPER_*` values over it.
     pub fn load(path: PathBuf) -> Result<Self> {
-        let mut settings: Self = config::Config::builder()
-            .add_source(
-                config::File::from(path.as_path())
-                    .format(config::FileFormat::Json)
-                    .required(false),
-            )
-            .add_source(config::Environment::with_prefix("KEEPER"))
-            .build()?
-            .try_deserialize()?;
-        settings.other = match std::fs::read_to_string(&path) {
-            Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)?,
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-            _ => Map::new(),
+        reject_symlink(&path)?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
         };
+        let file_values = if text.trim().is_empty() {
+            Map::new()
+        } else {
+            serde_json::from_str::<Map<String, Value>>(&text)?
+        };
+
+        let mut builder = config::Config::builder();
+        if !text.trim().is_empty() {
+            builder = builder.add_source(config::File::from_str(&text, config::FileFormat::Json));
+        }
+        let merged = builder
+            .add_source(config::Environment::with_prefix("KEEPER").ignore_empty(true))
+            .build()?;
+        let values: Map<String, Value> = merged.try_deserialize()?;
+        validate_file_storage(&values)?;
+        let mut settings: Self = serde_json::from_value(Value::Object(values))?;
+        settings.user = settings.user.as_deref().and_then(nonempty);
+        settings.server = settings.server.as_deref().and_then(nonempty);
+        settings.device_token = settings.device_token.as_deref().and_then(nonempty);
+        settings.private_key = settings.private_key.as_deref().and_then(nonempty);
+        settings.clone_code = settings.clone_code.as_deref().and_then(nonempty);
+        settings.file_user = file_values.get("user").and_then(Value::as_str).and_then(nonempty);
+        settings.other = file_values;
         settings.path = path;
         Ok(settings)
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 
     pub fn server(&self) -> &str {
         self.server.as_deref().unwrap_or(DEFAULT_SERVER)
     }
 
-    /// Writes the file's other keys back untouched; known keys that are now `None` are removed.
+    /// Update the file atomically; stored credentials never follow a symlink or persist passwords.
     pub fn save(&self) -> Result<()> {
+        reject_symlink(&self.path)?;
         let mut out = self.other.clone();
         if let Value::Object(known) = serde_json::to_value(self)? {
             for (key, value) in known {
@@ -85,33 +90,81 @@ impl Settings {
                 }
             }
         }
-        if let Some(dir) = self.path.parent() {
+        out.remove("password");
+        out.remove("master_password");
+        if let Some(dir) = self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
         }
         write_private(&self.path, serde_json::to_string_pretty(&out)?.as_bytes())
     }
 }
 
-/// The file holds the device private key and clone code; keep it owner-only.
-#[cfg(unix)]
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    file.write_all(bytes)?;
-    Ok(())
+fn nonempty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-#[cfg(not(unix))]
+fn validate_file_storage(values: &Map<String, Value>) -> Result<()> {
+    match values.get("config_storage") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(storage)) if storage.eq_ignore_ascii_case("file") => Ok(()),
+        _ => {
+            Err(Error::Generic(
+                "config_storage must be 'file'; refusing to write device credentials to a protected backend config"
+                    .into(),
+            ))
+        }
+    }
+}
+
+fn reject_symlink(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(Error::Generic(format!("refusing to read or replace symlink config path {}", path.display())))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+static TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
+
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    Ok(std::fs::write(path, bytes)?)
+    use std::io::Write;
+
+    let parent = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let (temp, mut file) = loop {
+        let id = TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".keeper-cli-{}-{id}.tmp", std::process::id()));
+        match options.open(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        reject_symlink(path)?;
+        std::fs::rename(&temp, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -119,25 +172,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_keeps_unknown_commander_keys_and_drops_cleared_ones() {
+    fn roundtrip_keeps_unknown_keys_but_not_passwords_or_cleared_values() {
         let dir = std::env::temp_dir().join(format!("keeper-cli-settings-{}", std::process::id()));
         let path = dir.join("config.json");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&path, r#"{"user":"a@b.c","clone_code":"x","proxy":"http://p:1","debug":true}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"user":"a@b.c","clone_code":"x","proxy":"http://p:1","debug":true,"password":"secret"}"#,
+        )
+        .unwrap();
 
-        let mut s = Settings::load(path.clone()).unwrap();
-        assert_eq!(s.user.as_deref(), Some("a@b.c"));
-        assert_eq!(s.server(), DEFAULT_SERVER);
-        s.clone_code = None;
-        s.device_token = Some("tok".into());
-        s.save().unwrap();
+        let mut settings = Settings::load(path.clone()).unwrap();
+        assert_eq!(settings.user.as_deref(), Some("a@b.c"));
+        assert_eq!(settings.server(), DEFAULT_SERVER);
+        settings.clone_code = None;
+        settings.device_token = Some("tok".into());
+        settings.save().unwrap();
 
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["proxy"], "http://p:1");
         assert_eq!(saved["debug"], true);
         assert_eq!(saved["device_token"], "tok");
         assert!(saved.get("clone_code").is_none());
+        assert!(saved.get("password").is_none());
         assert!(Settings::load(dir.join("missing.json")).unwrap().user.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn blank_and_missing_files_are_empty_without_extension_probing() {
+        let dir = std::env::temp_dir().join(format!("keeper-cli-settings-empty-{}", std::process::id()));
+        let path = dir.join("config");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, " \n\t").unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"user":"other@example.com"}"#).unwrap();
+        assert!(Settings::load(path).unwrap().user.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_config_paths_are_not_read_or_replaced() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = std::env::temp_dir().join(format!("keeper-cli-settings-link-{}", std::process::id()));
+        let target = dir.join("real.json");
+        let link = dir.join("config.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&target, r#"{"user":"safe@example.com"}"#).unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(Settings::load(link.clone()).is_err());
+        let mut settings = Settings::load(target.clone()).unwrap();
+        settings.path = link;
+        assert!(settings.save().is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), r#"{"user":"safe@example.com"}"#);
+        settings.path = target.clone();
+        settings.save().unwrap();
+        assert_eq!(std::fs::metadata(target).unwrap().permissions().mode() & 0o777, 0o600);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

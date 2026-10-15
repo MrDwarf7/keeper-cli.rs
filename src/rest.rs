@@ -5,16 +5,22 @@
 //! Commander additionally supports ML-KEM hybrid ("QRC") key exchange. The server still
 //! accepts the classic EC exchange, which is all this client implements.
 
+use std::str::FromStr;
 use std::time::Duration;
 
+use p256::PublicKey;
 use prost::Message;
-use serde::Deserialize;
+use rand::rngs::OsRng;
+use rsa::pkcs1::DecodeRsaPublicKey;
+use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 
 use crate::crypto;
+use crate::error::ApiFailure;
 use crate::prelude::*;
 use crate::proto::authentication::{ApiRequest, ApiRequestPayload};
 
 pub const CLIENT_VERSION: &str = "c18.1.0";
+pub const LOCALE: &str = "en_US";
 const DEFAULT_SERVER_KEY_ID: i32 = 7;
 const MAX_THROTTLE_RETRIES: u32 = 3;
 
@@ -42,53 +48,98 @@ const EC_SERVER_KEYS: [&str; 12] = [
     "BNhngQqTT1bPKxGuB6FhbPTAeNVFl8PKGGSGo5W06xWIReutm6ix6JPivqnbvkydY-1uDQTr-5e6t70G01Bb5JA",
 ];
 
-/// JSON error body returned with HTTP 4xx/5xx.
-#[derive(Debug, Default, Deserialize)]
-pub struct ApiFailure {
-    #[serde(default, alias = "result_code")]
-    pub error:           String,
-    #[serde(default)]
-    pub message:         String,
-    #[serde(default)]
-    pub additional_info: Option<String>,
-    #[serde(default)]
-    pub key_id:          Option<i32>,
-    #[serde(default)]
-    pub region_host:     Option<String>,
-}
+/// A validated Keeper endpoint. Region names and production/dev/QA hosts normalize here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Host(String);
 
-impl From<ApiFailure> for Error {
-    fn from(f: ApiFailure) -> Self {
-        Error::api(f.error, f.message)
+impl Default for Host {
+    fn default() -> Self {
+        Self("keepersecurity.com".into())
     }
 }
 
-pub enum Response {
-    Ok(Vec<u8>),
-    Failed(ApiFailure),
+impl FromStr for Host {
+    type Err = Error;
+
+    fn from_str(server: &str) -> Result<Self> {
+        let input = server.trim();
+        let host = match input.strip_prefix("https://") {
+            Some(host) => host,
+            None if input.contains("://") => return Err(Error::Generic(format!("invalid Keeper server {input:?}"))),
+            None => input,
+        }
+        .split('/')
+        .next()
+        .unwrap_or_default();
+        let region = host.to_ascii_uppercase().replace('-', "_");
+        let resolved = match region.as_str() {
+            "US" => "keepersecurity.com",
+            "EU" => "keepersecurity.eu",
+            "AU" => "keepersecurity.com.au",
+            "CA" => "keepersecurity.ca",
+            "JP" => "keepersecurity.jp",
+            "GOV" => "govcloud.keepersecurity.us",
+            "US_DEV" => "dev.keepersecurity.com",
+            "EU_DEV" => "dev.keepersecurity.eu",
+            "AU_DEV" => "dev.keepersecurity.com.au",
+            "CA_DEV" => "dev.keepersecurity.ca",
+            "JP_DEV" => "dev.keepersecurity.jp",
+            "GOV_DEV" => "govcloud.dev.keepersecurity.us",
+            "US_QA" => "qa.keepersecurity.com",
+            "EU_QA" => "qa.keepersecurity.eu",
+            "AU_QA" => "qa.keepersecurity.com.au",
+            "CA_QA" => "qa.keepersecurity.ca",
+            "JP_QA" => "qa.keepersecurity.jp",
+            "GOV_QA" => "govcloud.qa.keepersecurity.us",
+            _ => {
+                [
+                    "keepersecurity.com",
+                    "keepersecurity.eu",
+                    "keepersecurity.com.au",
+                    "keepersecurity.ca",
+                    "keepersecurity.jp",
+                    "govcloud.keepersecurity.us",
+                    "dev.keepersecurity.com",
+                    "dev.keepersecurity.eu",
+                    "dev.keepersecurity.com.au",
+                    "dev.keepersecurity.ca",
+                    "dev.keepersecurity.jp",
+                    "govcloud.dev.keepersecurity.us",
+                    "qa.keepersecurity.com",
+                    "qa.keepersecurity.eu",
+                    "qa.keepersecurity.com.au",
+                    "qa.keepersecurity.ca",
+                    "qa.keepersecurity.jp",
+                    "govcloud.qa.keepersecurity.us",
+                ]
+                .into_iter()
+                .find(|known| known.eq_ignore_ascii_case(host))
+                .ok_or_else(|| Error::Generic(format!("unknown Keeper server {input:?}")))?
+            }
+        };
+        Ok(Self(resolved.into()))
+    }
+}
+
+impl std::fmt::Display for Host {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 pub struct RestContext {
-    pub server_base:   String,
-    transmission_key:  Vec<u8>,
-    pub server_key_id: i32,
-    pub locale:        String,
-    http:              reqwest::blocking::Client,
-}
-
-/// `keepersecurity.eu` and `https://keepersecurity.eu/api/v2/` both mean the same server.
-pub fn server_host(server: &str) -> String {
-    let without_scheme = server.split_once("://").map_or(server, |(_, rest)| rest);
-    without_scheme.split('/').next().unwrap_or_default().to_owned()
+    pub host:         Host,
+    transmission_key: Vec<u8>,
+    server_key_id:    i32,
+    http:             reqwest::blocking::Client,
 }
 
 impl RestContext {
     pub fn new(server: &str) -> Result<Self> {
         Ok(Self {
-            server_base:      format!("https://{}/api/rest/", server_host(server)),
+            host:             server.parse()?,
             transmission_key: crypto::random_bytes(32),
             server_key_id:    DEFAULT_SERVER_KEY_ID,
-            locale:           "en_US".into(),
             http:             reqwest::blocking::Client::builder()
                 .connect_timeout(Duration::from_secs(15))
                 .timeout(Duration::from_secs(300))
@@ -96,84 +147,90 @@ impl RestContext {
         })
     }
 
-    pub fn set_server(&mut self, server: &str) {
-        self.server_base = format!("https://{}/api/rest/", server_host(server));
-    }
-
-    pub fn host(&self) -> String {
-        server_host(&self.server_base)
-    }
-
     fn seal_transmission_key(&self) -> Result<Vec<u8>> {
         match self.server_key_id {
             id @ 1..=6 => {
-                crypto::encrypt_rsa(
-                    &self.transmission_key,
-                    &crypto::load_rsa_public_key(&b64_decode(RSA_SERVER_KEYS[id as usize - 1])?)?,
-                )
+                let public_key = RsaPublicKey::from_pkcs1_der(&b64_decode(RSA_SERVER_KEYS[id as usize - 1])?)
+                    .map_err(|_| Error::Crypto("invalid RSA public key".into()))?;
+                public_key
+                    .encrypt(&mut OsRng, Pkcs1v15Encrypt, &self.transmission_key)
+                    .map_err(|_| Error::Crypto("RSA encryption failed".into()))
             }
             id @ 7..=18 => {
-                crypto::encrypt_ec(
-                    &self.transmission_key,
-                    &crypto::load_ec_public_key(&b64_decode(EC_SERVER_KEYS[id as usize - 7])?)?,
-                )
+                let public_key = PublicKey::from_sec1_bytes(&b64_decode(EC_SERVER_KEYS[id as usize - 7])?)
+                    .map_err(|_| Error::Crypto("invalid EC public key".into()))?;
+                crypto::encrypt_ec(&self.transmission_key, &public_key)
             }
             id => Err(Error::api("invalid_key_id", format!("Key ID \"{id}\" is not valid."))),
         }
     }
 
-    pub fn execute(&mut self, endpoint: &str, payload: &ApiRequestPayload) -> Result<Response> {
+    pub fn execute<M: Message>(&mut self, endpoint: &str, session_token: &[u8], request: &M) -> Result<Vec<u8>> {
+        self.execute_payload(
+            endpoint,
+            &ApiRequestPayload {
+                payload: request.encode_to_vec(),
+                encrypted_session_token: session_token.to_vec(),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Sends an already framed payload for the legacy JSON command endpoint.
+    pub(crate) fn execute_payload(&mut self, endpoint: &str, payload: &ApiRequestPayload) -> Result<Vec<u8>> {
         let url = if endpoint.starts_with("https://") {
             endpoint.to_owned()
         } else {
-            format!("{}{}", self.server_base, endpoint)
+            format!("https://{}/api/rest/{endpoint}", self.host)
         };
         let mut throttle_retries = 0;
         loop {
             let request = ApiRequest {
                 encrypted_transmission_key: self.seal_transmission_key()?,
                 public_key_id: self.server_key_id,
-                locale: self.locale.clone(),
+                locale: LOCALE.into(),
                 encrypted_payload: crypto::encrypt_aes_v2(&payload.encode_to_vec(), &self.transmission_key)?,
                 ..Default::default()
             };
-            let rs = self
+            let response = self
                 .http
                 .post(&url)
                 .header("Content-Type", "application/octet-stream")
                 .body(request.encode_to_vec())
                 .send()?;
-            let status = rs.status().as_u16();
-            let is_json = rs
+            let status = response.status();
+            let status_code = status.as_u16();
+            let reason = status.canonical_reason().unwrap_or("HTTP error").to_owned();
+            let is_json = response
                 .headers()
                 .get("Content-Type")
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| v.starts_with("application/json"));
-            let body = rs.bytes()?;
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("application/json"));
+            let body = response.bytes()?;
 
-            if status == 200 {
+            if status_code == 200 {
                 if is_json {
-                    return Ok(Response::Failed(parse_failure(&body)));
+                    return Err(parse_failure(&body).into());
                 }
-                return Ok(Response::Ok(if body.is_empty() {
-                    Vec::new()
+                return if body.is_empty() {
+                    Ok(Vec::new())
                 } else {
-                    crypto::decrypt_aes_v2(&body, &self.transmission_key)?
-                }));
+                    crypto::decrypt_aes_v2(&body, &self.transmission_key)
+                };
             }
             if !is_json {
-                return Err(Error::api(status.to_string(), String::from_utf8_lossy(&body).into_owned()));
+                return Err(Error::api(status_code.to_string(), reason));
             }
 
             let failure = parse_failure(&body);
-            if status == 401
+            if status_code == 401
                 && failure.error == "key"
                 && let Some(key_id) = failure.key_id.filter(|&id| id != self.server_key_id)
             {
                 self.server_key_id = key_id;
                 continue;
             }
-            if matches!(status, 403 | 429) && failure.error == "throttled" {
+            if matches!(status_code, 403 | 429) && failure.error == "throttled" {
                 throttle_retries += 1;
                 if throttle_retries > MAX_THROTTLE_RETRIES {
                     return Err(failure.into());
@@ -183,7 +240,7 @@ impl RestContext {
                 std::thread::sleep(Duration::from_secs(wait));
                 continue;
             }
-            return Ok(Response::Failed(failure));
+            return Err(failure.into());
         }
     }
 }
@@ -229,18 +286,26 @@ mod tests {
     #[test]
     fn every_bundled_server_key_parses() {
         for key in RSA_SERVER_KEYS {
-            crypto::load_rsa_public_key(&b64_decode(key).unwrap()).unwrap();
+            RsaPublicKey::from_pkcs1_der(&b64_decode(key).unwrap()).unwrap();
         }
         for key in EC_SERVER_KEYS {
-            crypto::load_ec_public_key(&b64_decode(key).unwrap()).unwrap();
+            PublicKey::from_sec1_bytes(&b64_decode(key).unwrap()).unwrap();
         }
     }
 
     #[test]
-    fn server_host_normalizes_region_inputs() {
-        assert_eq!(server_host("keepersecurity.eu"), "keepersecurity.eu");
-        assert_eq!(server_host("https://keepersecurity.com/api/v2/"), "keepersecurity.com");
-        assert_eq!(server_host("https://govcloud.keepersecurity.us/api/rest/"), "govcloud.keepersecurity.us");
+    fn host_resolves_regions_and_rejects_unknown_values() {
+        assert_eq!("EU".parse::<Host>().unwrap().to_string(), "keepersecurity.eu");
+        assert_eq!("us-dev".parse::<Host>().unwrap().to_string(), "dev.keepersecurity.com");
+        assert_eq!(
+            "https://govcloud.keepersecurity.us/api/v2/"
+                .parse::<Host>()
+                .unwrap()
+                .to_string(),
+            "govcloud.keepersecurity.us"
+        );
+        assert!("".parse::<Host>().is_err());
+        assert!("unknown.example.com".parse::<Host>().is_err());
     }
 
     #[test]
