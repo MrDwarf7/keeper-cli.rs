@@ -442,6 +442,52 @@ fn settle(found: Findings, warnings: Warnings) -> Result<()> {
     Ok(())
 }
 
+struct RecordTypeLookup<'a> {
+    record_types: &'a [pb::RecordType],
+    name:         &'a str,
+}
+
+impl TryFrom<RecordTypeLookup<'_>> for TypeDef {
+    type Error = Error;
+
+    fn try_from(lookup: RecordTypeLookup<'_>) -> Result<Self> {
+        let digits = lookup
+            .name
+            .strip_prefix('+')
+            .or_else(|| lookup.name.strip_prefix('-'))
+            .unwrap_or(lookup.name);
+        let id_syntax = !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit());
+        let wanted_id = if id_syntax {
+            Some(lookup.name.parse::<i64>().map_err(|source| {
+                Error::Context {
+                    context: format!("parsing record type ID {:?}", lookup.name),
+                    source:  Box::new(source.into()),
+                }
+            })?)
+        } else {
+            None
+        };
+
+        for record_type in lookup.record_types {
+            // User, enterprise and PAM types are numbered in blocks of a million by scope.
+            let id = i64::from(record_type.record_type_id) + i64::from(record_type.scope) * 1_000_000;
+            if wanted_id.is_some_and(|wanted| wanted != id) {
+                continue;
+            }
+            let def: TypeDef = serde_json::from_str(&record_type.content).map_err(|source| {
+                Error::Context {
+                    context: format!("decoding record type definition {id}"),
+                    source:  Box::new(source.into()),
+                }
+            })?;
+            if (wanted_id.is_some() || def.id == lookup.name) && !def.fields.is_empty() {
+                return Ok(def);
+            }
+        }
+        Err(Error::Generic(format!("Record type \"{}\" cannot be found.", lookup.name)))
+    }
+}
+
 /// The definition of a record type by name or numeric ID, from the server.
 fn record_type(session: &mut Session, name: &str) -> Result<TypeDef> {
     let rq = pb::RecordTypesRequest {
@@ -454,17 +500,10 @@ fn record_type(session: &mut Session, name: &str) -> Result<TypeDef> {
         .rest
         .execute("vault/get_record_types", &session.session_token, &rq)?;
     let rs = pb::RecordTypesResponse::decode(bytes.as_slice())?;
-    let wanted_id = name.parse::<i64>().ok();
-    rs.record_types
-        .iter()
-        .find_map(|rt| {
-            let def: TypeDef = serde_json::from_str(&rt.content).ok()?;
-            // User, enterprise and PAM types are numbered in blocks of a million by scope.
-            let id = i64::from(rt.record_type_id) + i64::from(rt.scope) * 1_000_000;
-            let hit = wanted_id.map_or(def.id == name, |wanted| wanted == id);
-            (hit && !def.fields.is_empty()).then_some(def)
-        })
-        .ok_or_else(|| Error::Generic(format!("Record type \"{name}\" cannot be found.")))
+    TypeDef::try_from(RecordTypeLookup {
+        record_types: &rs.record_types,
+        name,
+    })
 }
 
 /// A record about to be created.
@@ -722,7 +761,7 @@ fn find(vault: &Vault, cwd: &Location, name: &str) -> Result<Vec<Filing>> {
             .collect()
     };
 
-    if let Some(record) = name.parse::<Uid>().ok().and_then(|uid| vault.records.get(&uid)) {
+    if let Some(record) = vault.records.get(name.trim_end_matches('=')) {
         let filings = filed(&record.uid);
         return Ok(if filings.is_empty() {
             vec![Filing {
@@ -1102,5 +1141,59 @@ mod tests {
                 origin: Origin::Root,
             }]
         );
+    }
+
+    #[test]
+    fn record_type_lookup_preserves_selection_errors_and_scoped_ids() {
+        let def = r#"{"$id":"login","fields":[{}]}"#;
+        let definition = |record_type_id, scope, content: &str| {
+            pb::RecordType {
+                record_type_id,
+                scope,
+                content: content.into(),
+            }
+        };
+        let malformed = [definition(7, 0, "{")];
+        let error = TypeDef::try_from(RecordTypeLookup {
+            record_types: &malformed,
+            name:         "login",
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Context { source, .. } if matches!(source.as_ref(), Error::Json(_))
+        ));
+        assert!(matches!(
+            TypeDef::try_from(RecordTypeLookup {
+                record_types: &[],
+                name:         "missing",
+            }),
+            Err(Error::Generic(_))
+        ));
+
+        let error = TypeDef::try_from(RecordTypeLookup {
+            record_types: &[],
+            name:         "999999999999999999999999",
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Context { source, .. } if matches!(source.as_ref(), Error::ParseInt(_))
+        ));
+
+        let definitions = [definition(9, 0, "{"), definition(42, 2, def)];
+        let selected = TypeDef::try_from(RecordTypeLookup {
+            record_types: &definitions,
+            name:         "2000042",
+        })
+        .unwrap();
+        assert_eq!(selected.id, "login");
+
+        let selected = TypeDef::try_from(RecordTypeLookup {
+            record_types: &definitions[1..],
+            name:         "login",
+        })
+        .unwrap();
+        assert_eq!(selected.id, "login");
     }
 }
