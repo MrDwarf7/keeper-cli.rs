@@ -5,6 +5,16 @@ use std::str::FromStr;
 
 use crate::prelude::*;
 
+/// Exclude base64url's punctuation prefixes for use as bare CLI arguments.
+pub(crate) fn random_bytes<R: rand::RngCore + rand::CryptoRng>(rng: &mut R) -> [u8; 16] {
+    let mut bytes = [0; 16];
+    rand::RngCore::fill_bytes(rng, &mut bytes);
+    if bytes[0] & 0xf8 == 0xf8 {
+        bytes[0] &= 0x7f;
+    }
+    bytes
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uid(String);
 
@@ -60,5 +70,27 @@ mod tests {
         assert_eq!(Vec::<u8>::from(&uid), bytes);
         assert_eq!(format!("{uid}==").parse::<Uid>().unwrap(), uid);
         assert!("not base64!".parse::<Uid>().is_err());
+    }
+
+    #[test]
+    fn generated_bytes_avoid_option_prefix_without_changing_entropy() {
+        use rand::SeedableRng;
+
+        for seed in 0..256 {
+            let mut raw_rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let mut generated_rng = raw_rng.clone();
+            let mut raw = [0; 16];
+            rand::RngCore::fill_bytes(&mut raw_rng, &mut raw);
+
+            let generated = random_bytes(&mut generated_rng);
+            let encoded = Uid::from(generated.as_slice());
+            assert!(!encoded.as_ref().starts_with('-') && !encoded.as_ref().starts_with('_'));
+            assert_eq!(&generated[1..], &raw[1..]);
+            assert_eq!(generated[0] & 0x7f, raw[0] & 0x7f);
+            let raw_uid = Uid::from(raw.as_slice());
+            if !matches!(raw_uid.as_ref().as_bytes()[0], b'-' | b'_') {
+                assert_eq!(generated, raw);
+            }
+        }
     }
 }

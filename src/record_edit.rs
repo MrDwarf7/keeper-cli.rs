@@ -329,17 +329,7 @@ fn with_vault<T>(app: &mut App, job: impl FnOnce(&mut Ctx<'_>) -> Result<T>) -> 
     outcome
 }
 
-// --- ids and time ------------------------------------------------------------------------------
-
-/// Keeper UIDs are 16 random bytes, shown as unpadded URL-safe base64. Keep the first character
-/// away from `-` and `_` so a UID never looks like an option.
-fn random_uid() -> Uid {
-    let mut bytes = crate::crypto::random_bytes(16);
-    if bytes[0] & 0xf8 == 0xf8 {
-        bytes[0] &= 0x7f;
-    }
-    Uid::from(bytes.as_slice())
-}
+// --- time --------------------------------------------------------------------------------------
 
 fn now_millis() -> i64 {
     std::time::SystemTime::now()
@@ -372,7 +362,7 @@ fn create(ctx: &mut Ctx<'_>, add: &Add) -> Result<()> {
     settle(found, add.warnings)?;
 
     let new = New {
-        uid: random_uid(),
+        uid: Uid::from(crate::uid::random_bytes(&mut rand::rngs::OsRng).as_slice()),
         key: AesKey::random(),
         body,
     };
