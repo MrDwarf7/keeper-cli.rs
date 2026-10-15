@@ -81,7 +81,7 @@ These work with every command.
 
 | Option                  | Env var              | Description                                       |
 | ----------------------- | -------------------- | ------------------------------------------------- |
-| `--config <CONFIG>`     | `KEEPER_CONFIG_FILE` | Config file (default `~/.keeper/keeper-cli.json`) |
+| `--config <CONFIG>`     | `KEEPER_CONFIG_FILE` | Config file (default: see Configuration)          |
 | `--user <USER>`         |                      | Account email                                     |
 | `--password <PASSWORD>` | `KEEPER_PASSWORD`    | Master password; prompted for when omitted        |
 | `--server <SERVER>`     |                      | Keeper region host, e.g. `keepersecurity.eu`      |
@@ -132,8 +132,10 @@ policy can forbid this; the command reports that when it happens.
 
 ## Configuration
 
-keeper-cli reads and writes one JSON file, `~/.keeper/keeper-cli.json` by
-default. Override the path with `--config` or `KEEPER_CONFIG_FILE`.
+keeper-cli reads and writes one JSON file, `config.json` in the platform config
+directory: `~/.config/keeper-cli/` on Linux, `~/Library/Application
+Support/keeper-cli/` on macOS, `%APPDATA%\keeper-cli\` on Windows. Override the
+path with `--config` or `KEEPER_CONFIG_FILE`.
 
 | Key            | Meaning                                          |
 | -------------- | ------------------------------------------------ |
@@ -148,6 +150,11 @@ Commander's `config.json`. Commander can keep protected values in the OS
 keychain, and keeper-cli must not overwrite that file with plaintext ones. To
 reuse a Commander device, point `--config` at a config saved with
 `config_storage: "file"`. Unknown keys are kept when the file is saved.
+
+Each key can also come from a `KEEPER_<KEY>` environment variable, which wins
+over the file: `KEEPER_USER`, `KEEPER_SERVER`, `KEEPER_DEVICE_TOKEN`,
+`KEEPER_PRIVATE_KEY`, `KEEPER_CLONE_CODE`. An override is written to the file
+the next time keeper-cli saves it, for example after a login.
 
 The file holds the device private key and clone code, so on Unix it is written
 with mode `0600`.

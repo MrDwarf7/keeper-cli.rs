@@ -94,9 +94,11 @@ The crate is a single binary; each module has one job.
   implementations, and the shell loop. One-shot commands log in and sync on
   demand; the shell keeps the session and vault between lines.
 - `totp.rs`, `generator.rs`: TOTP codes and password generation.
-- `config.rs`: the JSON config at `~/.keeper/keeper-cli.json`. It is separate
-  from Commander's `config.json` so that plaintext values never overwrite a file
-  whose protected values live in the OS keychain.
+- `settings.rs`: the JSON config, `keeper-cli/config.json` in the platform
+  config directory, loaded with the `config` crate so `KEEPER_<KEY>` environment
+  variables override file values. It is separate from Commander's `config.json`
+  so that plaintext values never overwrite a file whose protected values live in
+  the OS keychain.
 - `proto/keeper.fds.bin`: a `FileDescriptorSet` extracted from Commander's
   `*_pb2.py` by `tools/extract-protos.ts` and compiled by `build.rs` with
   `prost-build`. Re-run the script against a Commander checkout when Keeper
