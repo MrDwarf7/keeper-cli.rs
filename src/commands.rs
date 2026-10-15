@@ -222,6 +222,7 @@ impl App {
                 Ok(())
             }
             Command::DownloadAttachment(c) => c.run(self),
+            Command::UploadAttachment(c) => c.run(self),
             Command::ThisDevice { action } => self.this_device(action),
             Command::Shell | Command::Exit => Ok(()),
         }

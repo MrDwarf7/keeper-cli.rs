@@ -1,31 +1,51 @@
-//! `download-attachment`: the files attached to records.
+//! `download-attachment` and `upload-attachment`: the files attached to records.
 //!
 //! A v3 record lists its files in a `fileRef` field. Each entry is the UID of a v4 *file record*
 //! whose own key encrypts the content, stored behind a signed URL that `vault/files_download`
-//! hands out. A legacy v2 record keeps its files in `extra.files`, each with a key of its own, and
-//! gets the URL from the JSON `request_download` command. Content is framed like every other
-//! Keeper blob: `iv|ciphertext` for CBC, `nonce|ciphertext|tag` for GCM.
+//! (`vault/files_add` for uploads) hands out. A legacy v2 record keeps its files in `extra.files`,
+//! each with a key of its own, and gets the URL from the JSON `request_download` command. Content
+//! is framed like every other Keeper blob: `iv|ciphertext` for CBC, `nonce|ciphertext|tag` for GCM.
 //!
-//! ponytail: a file is held in memory whole (once, decrypted in place). Stream it if attachments
-//! beyond a few hundred MB matter; GCM can only be authenticated at the end anyway.
+//! Uploading adds a file record per file (`files_add`), posts the encrypted content to the signed
+//! form it returns, then rewrites the parent so its `fileRef` lists the new UIDs and
+//! `record_links_add` carries each file key wrapped in the parent's key.
+//!
+//! ponytail: a file is held in memory whole (once, encrypted or decrypted in place). Stream it if
+//! attachments beyond a few hundred MB matter; GCM can only be authenticated at the end anyway.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::ffi::OsStr;
-use std::io::Read;
+use std::fmt;
+use std::io::{Cursor, Read};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Args;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Body, Client};
 use serde_json::{Value, json};
 
 use crate::auth::Session;
 use crate::commands::{App, Run, resolve_folder, resolve_record};
 use crate::crypto;
 use crate::prelude::*;
-use crate::proto::records::{FileGetResult, FilesGetRequest, FilesGetResponse, RecordKeyType};
+use crate::proto::records::{
+    File as FileEntry,
+    FileAddResult,
+    FileAddStatus,
+    FileGetResult,
+    FilesAddRequest,
+    FilesAddResponse,
+    FilesGetRequest,
+    FilesGetResponse,
+    RecordKeyType,
+    RecordLink,
+    RecordModifyResult,
+    RecordUpdate,
+    RecordsModifyResponse,
+    RecordsUpdateRequest,
+};
 use crate::vault::{Record, Vault};
 
 /// Download record attachments
@@ -505,6 +525,295 @@ fn download(http: &Client, ticket: &Ticket, key: &[u8], path: &Path) -> Result<(
     std::fs::write(path, plain).map_err(|e| Error::Generic(format!("{}: {e}", path.display())))
 }
 
+/// Upload files to a record
+#[derive(Args, Debug)]
+pub struct UploadAttachment {
+    /// File to upload (repeatable)
+    #[arg(long = "file", required = true)]
+    files:  Vec<UserPath>,
+    /// Record path or UID
+    record: String,
+}
+
+/// A file picked for upload.
+struct LocalFile {
+    path: PathBuf,
+    name: String,
+    size: usize,
+    mime: MimeType,
+}
+
+impl TryFrom<&UserPath> for LocalFile {
+    type Error = Error;
+
+    fn try_from(typed: &UserPath) -> Result<Self> {
+        let path = std::path::absolute(typed)?;
+        let size = path
+            .metadata()
+            .ok()
+            .filter(|meta| meta.is_file())
+            .and_then(|meta| usize::try_from(meta.len()).ok())
+            .ok_or_else(|| Error::Generic(format!("File \"{}\" does not exist", typed.0.display())))?;
+        Ok(Self {
+            name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            mime: MimeType::from(path.as_path()),
+            path,
+            size,
+        })
+    }
+}
+
+/// Content type guessed from a file's extension, as Python's `mimetypes` does for Commander
+/// (common types only); empty when unknown.
+struct MimeType(&'static str);
+
+impl From<&Path> for MimeType {
+    fn from(path: &Path) -> Self {
+        let extension = path
+            .extension()
+            .and_then(OsStr::to_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        Self(match extension.as_str() {
+            "txt" | "text" => "text/plain",
+            "html" | "htm" => "text/html",
+            "css" => "text/css",
+            "csv" => "text/csv",
+            "xml" => "text/xml",
+            "json" => "application/json",
+            "pdf" => "application/pdf",
+            "zip" => "application/zip",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "svg" => "image/svg+xml",
+            "doc" => "application/msword",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xls" => "application/vnd.ms-excel",
+            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _ => "",
+        })
+    }
+}
+
+impl fmt::Display for MimeType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+/// A file record being created: its UID and the key its metadata and content are encrypted with.
+struct NewFile {
+    uid: Vec<u8>,
+    key: Vec<u8>,
+}
+
+impl NewFile {
+    fn random() -> Self {
+        let mut uid = crypto::random_bytes(16);
+        // Like Commander, keep the first byte below 0xf8 so the encoded UID never starts with '-' or '_'
+        if uid[0] & 0xf8 == 0xf8 {
+            uid[0] &= 0x7f;
+        }
+        Self {
+            uid,
+            key: crypto::random_bytes(32),
+        }
+    }
+}
+
+impl Run for UploadAttachment {
+    fn run(self, app: &mut App) -> Result<()> {
+        let cwd = app.cwd.clone();
+        let files = self.files.iter().map(LocalFile::try_from).collect::<Result<Vec<_>>>()?;
+        let (session, vault) = connected(app)?;
+        let record = resolve_record(vault, &cwd, &self.record)
+            .ok_or_else(|| Error::Generic(format!("Record UID not found for record \"{}\"", self.record)))?;
+        // ponytail: legacy v2 records go through request_upload and a JSON record_update;
+        // only typed records are covered until someone needs to attach to an old record.
+        if record.version != 3 {
+            return Err(Error::Generic(format!(
+                "Cannot attach files to \"{}\": only typed (v3) records are supported",
+                record.title()
+            )));
+        }
+
+        let new: Vec<NewFile> = files.iter().map(|_| NewFile::random()).collect();
+        let rs: FilesAddResponse =
+            session.call_typed("vault/files_add", &add_request(&files, &new, &session.data_key)?)?;
+        let http = http_client()?;
+        for (file, new) in files.iter().zip(&new) {
+            let target = rs
+                .files
+                .iter()
+                .find(|status| status.record_uid == new.uid && status.status == FileAddResult::FaSuccess as i32)
+                .ok_or_else(|| Error::Generic(format!("Uploading file {}: Get upload URL error.", file.name)))?;
+            send(&http, target, file, new)?;
+        }
+
+        let key_type = if session.summary.forbid_key_type2 {
+            RecordKeyType::EncryptedByPublicKeyEcc
+        } else {
+            RecordKeyType::EncryptedByPublicKey
+        };
+        let rq = link_request(record, &new, key_type)?;
+        let rs: RecordsModifyResponse = session.call_typed("vault/records_update", &rq)?;
+        if let Some(status) = rs
+            .records
+            .iter()
+            .find(|status| status.record_uid == rq.records[0].record_uid)
+            .filter(|status| status.status != RecordModifyResult::RsSuccess as i32)
+        {
+            let name = RecordModifyResult::try_from(status.status).map_or("UNKNOWN", |result| result.as_str_name());
+            return Err(Error::api(name, status.message.clone()));
+        }
+        eprintln!("Uploaded {} file(s) to \"{}\"", files.len(), record.title());
+        // Commander syncs after every write; the next command here does the same
+        app.vault = None;
+        Ok(())
+    }
+}
+
+/// The `vault/files_add` request: per file, its key sealed for this account and its metadata
+/// sealed with its own key.
+fn add_request(files: &[LocalFile], new: &[NewFile], data_key: &[u8]) -> Result<FilesAddRequest> {
+    Ok(FilesAddRequest {
+        files:       files
+            .iter()
+            .zip(new)
+            .map(|(file, new)| -> Result<FileEntry> {
+                let metadata = json!({
+                    "title": file.name,
+                    "name": file.name,
+                    "type": file.mime.to_string(),
+                    "size": file.size,
+                });
+                Ok(FileEntry {
+                    record_uid: new.uid.clone(),
+                    record_key: crypto::encrypt_aes_v2(&new.key, data_key)?,
+                    data: crypto::encrypt_aes_v2(metadata.to_string().as_bytes(), &new.key)?,
+                    // Headroom over the nonce and tag, as Commander reserves
+                    file_size: i64::try_from(file.size).unwrap_or(i64::MAX).saturating_add(100),
+                    ..Default::default()
+                })
+            })
+            .collect::<Result<_>>()?,
+        client_time: now_millis(),
+    })
+}
+
+/// The file's content as `nonce|ciphertext|tag`, encrypted where it was read so a large file is
+/// never copied just to be framed.
+fn sealed(file: &LocalFile, key: &[u8]) -> Result<Vec<u8>> {
+    let mut frame = vec![0; 12];
+    frame
+        .try_reserve_exact(file.size + 16)
+        .map_err(|_| Error::Generic(format!("{} does not fit in memory", file.name)))?;
+    std::fs::File::open(&file.path)?.read_to_end(&mut frame)?;
+    frame.extend_from_slice(&[0; 16]);
+    crypto::encrypt_aes_v2_in_place(&mut frame, key)?;
+    Ok(frame)
+}
+
+/// The text before and after the encrypted file in a `multipart/form-data` body. The server's form
+/// fields come first and the file last: S3-style POST policies ignore anything after the file.
+fn form_framing(parameters: &str, boundary: &str, file_ref: &str) -> Result<(String, String)> {
+    let fields: serde_json::Map<String, Value> = serde_json::from_str(parameters)?;
+    let mut head: String = fields
+        .iter()
+        .map(|(name, value)| {
+            let value = value.as_str().map_or_else(|| value.to_string(), str::to_owned);
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
+        })
+        .collect();
+    head += &format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_ref}\"\r\nContent-Type: \
+         application/octet-stream\r\n\r\n"
+    );
+    Ok((head, format!("\r\n--{boundary}--\r\n")))
+}
+
+/// Posts the encrypted file to its signed upload URL. The header, ciphertext and trailer are
+/// chained into the request body rather than concatenated.
+fn send(http: &Client, target: &FileAddStatus, file: &LocalFile, new: &NewFile) -> Result<()> {
+    let frame = sealed(file, &new.key)?;
+    let boundary = data_encoding::HEXLOWER.encode(&crypto::random_bytes(16));
+    let (head, tail) = form_framing(&target.parameters, &boundary, &b64_encode(&new.uid))?;
+    let len = (head.len() + frame.len() + tail.len()) as u64;
+    let body = Body::sized(
+        Cursor::new(head.into_bytes())
+            .chain(Cursor::new(frame))
+            .chain(Cursor::new(tail.into_bytes())),
+        len,
+    );
+    let response = http
+        .post(&target.url)
+        .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+        .body(body)
+        .send()?;
+    let status = response.status().as_u16();
+    if i32::from(status) != target.success_status_code {
+        return Err(Error::Generic(format!("Uploading file {}: HTTP status code {status}", file.name)));
+    }
+    Ok(())
+}
+
+/// The `vault/records_update` request that lists `new` in the record's `fileRef` field (creating the
+/// field when there is none) and links their keys under the record key.
+fn link_request(record: &Record, new: &[NewFile], key_type: RecordKeyType) -> Result<RecordsUpdateRequest> {
+    let mut data = record.data.clone();
+    let fields = data
+        .as_object_mut()
+        .map(|object| object.entry("fields").or_insert_with(|| json!([])))
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| Error::Generic(format!("Record {} has malformed data", record.uid)))?;
+    let refs = new.iter().map(|file| Value::from(b64_encode(&file.uid)));
+    let listed = fields
+        .iter_mut()
+        .find(|field| field["type"] == "fileRef")
+        .and_then(|field| field.get_mut("value"))
+        .and_then(Value::as_array_mut);
+    match listed {
+        Some(listed) => listed.extend(refs),
+        None => fields.push(json!({"type": "fileRef", "value": refs.collect::<Vec<_>>()})),
+    }
+
+    // Commander pads record data to a multiple of 16 bytes, 384 at least, so the GCM length
+    // reveals little about the record
+    let mut json = serde_json::to_vec(&data)?;
+    json.resize(json.len().max(384).next_multiple_of(16), b' ');
+    let now = now_millis();
+    Ok(RecordsUpdateRequest {
+        records:                vec![RecordUpdate {
+            record_uid: b64_decode(&record.uid)?,
+            client_modified_time: now,
+            revision: record.revision,
+            data: crypto::encrypt_aes_v2(&json, &record.key)?,
+            record_links_add: new
+                .iter()
+                .map(|file| -> Result<RecordLink> {
+                    Ok(RecordLink {
+                        record_uid: file.uid.clone(),
+                        record_key: crypto::encrypt_aes_v2(&file.key, &record.key)?,
+                    })
+                })
+                .collect::<Result<_>>()?,
+            ..Default::default()
+        }],
+        client_time:            now,
+        security_data_key_type: key_type as i32,
+    })
+}
+
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -530,6 +839,13 @@ mod tests {
             records: records.into_iter().map(|r| (r.uid.clone(), r)).collect(),
             ..Vault::default()
         }
+    }
+
+    /// A fresh empty folder; tests remove it when they pass.
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("keeper-cli-test-{}", b64_encode(&crypto::random_bytes(8))));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     fn attachment(name: &str) -> Attachment {
@@ -668,8 +984,7 @@ mod tests {
 
     #[test]
     fn taken_names_get_the_record_uid_then_the_file_id() {
-        let dir = std::env::temp_dir().join(format!("keeper-cli-test-{}", b64_encode(&crypto::random_bytes(8))));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir();
         assert_eq!(free_path(&dir, "a.tar.gz", "REC", "FILE"), dir.join("a.tar.gz"));
         std::fs::write(dir.join("a.tar.gz"), b"x").unwrap();
         assert_eq!(free_path(&dir, "a.tar.gz", "REC", "FILE"), dir.join("a.tar(REC).gz"));
@@ -773,5 +1088,159 @@ mod tests {
         assert!(download.recursive && download.preserve_dir && download.record_title);
         assert!(download.out_dir.is_some());
         assert!(ShellLine::try_parse_from(["download-attachment"]).is_err(), "a record is required");
+    }
+
+    #[test]
+    fn local_files_must_exist_and_report_name_size_and_type() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("Notes.TXT"), b"hello world").unwrap();
+        let file = LocalFile::try_from(&UserPath(dir.join("Notes.TXT"))).unwrap();
+        assert_eq!((file.name.as_str(), file.size, file.mime.to_string().as_str()), ("Notes.TXT", 11, "text/plain"));
+        std::fs::write(dir.join("archive.tar.gz"), b"").unwrap();
+        let tarball = LocalFile::try_from(&UserPath(dir.join("archive.tar.gz"))).unwrap();
+        assert_eq!(tarball.mime.to_string(), "");
+
+        let missing = LocalFile::try_from(&UserPath(dir.join("missing.bin"))).err().unwrap();
+        assert!(missing.to_string().contains("does not exist"), "{missing}");
+        assert!(LocalFile::try_from(&UserPath(dir.clone())).is_err(), "a folder is not a file");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sealed_content_decrypts_with_the_file_key_only() {
+        let dir = temp_dir();
+        let content: Vec<u8> = (0..=255u8).cycle().take(70_000).collect();
+        for (name, bytes) in [("big.bin", &content[..]), ("empty.bin", &[][..])] {
+            std::fs::write(dir.join(name), bytes).unwrap();
+            let file = LocalFile::try_from(&UserPath(dir.join(name))).unwrap();
+            let frame = sealed(&file, &[3; 32]).unwrap();
+            assert_eq!(frame.len(), bytes.len() + 28);
+            assert_eq!(crypto::decrypt_aes_v2(&frame, &[3; 32]).unwrap(), bytes);
+            assert!(crypto::decrypt_aes_v2(&frame, &[4; 32]).is_err());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_add_request_seals_the_key_for_the_account_and_metadata_for_the_file() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("notes.txt"), b"hello world").unwrap();
+        let files = [LocalFile::try_from(&UserPath(dir.join("notes.txt"))).unwrap()];
+        let new = [NewFile {
+            uid: vec![1; 16],
+            key: vec![6; 32],
+        }];
+        let rq = add_request(&files, &new, &[5; 32]).unwrap();
+
+        let entry = &rq.files[0];
+        assert_eq!(entry.record_uid, new[0].uid);
+        assert_eq!(crypto::decrypt_aes_v2(&entry.record_key, &[5; 32]).unwrap(), new[0].key);
+        let metadata: Value =
+            serde_json::from_slice(&crypto::decrypt_aes_v2(&entry.data, &new[0].key).unwrap()).unwrap();
+        assert_eq!(metadata, json!({"title": "notes.txt", "name": "notes.txt", "type": "text/plain", "size": 11}));
+        assert_eq!(entry.file_size, 111, "content plus Commander's 100 bytes of headroom");
+        assert!(rq.client_time > 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn new_files() -> [NewFile; 2] {
+        [
+            NewFile {
+                uid: vec![1; 16],
+                key: vec![6; 32],
+            },
+            NewFile {
+                uid: vec![2; 16],
+                key: vec![7; 32],
+            },
+        ]
+    }
+
+    #[test]
+    fn linking_appends_to_the_file_ref_field_and_wraps_file_keys_in_the_record_key() {
+        let uid = b64_encode(&[9; 16]);
+        let mut parent = record(
+            &uid,
+            3,
+            json!({"title": "Server", "fields": [{"type": "login", "value": ["root"]}, {"type": "fileRef", "value": ["OLD"]}]}),
+            1,
+        );
+        parent.revision = 41;
+        let new = new_files();
+        let rq = link_request(&parent, &new, RecordKeyType::EncryptedByPublicKeyEcc).unwrap();
+        assert_eq!(rq.security_data_key_type, RecordKeyType::EncryptedByPublicKeyEcc as i32);
+
+        let update = &rq.records[0];
+        assert_eq!(update.record_uid, [9; 16]);
+        assert_eq!(update.revision, 41);
+        let plain = crypto::decrypt_aes_v2(&update.data, &parent.key).unwrap();
+        assert!(plain.len() >= 384 && plain.len().is_multiple_of(16), "padded to a multiple of 16, 384 at least");
+        let data: Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(data["fields"][0], parent.data["fields"][0], "other fields are untouched");
+        assert_eq!(data["fields"][1]["value"], json!(["OLD", b64_encode(&new[0].uid), b64_encode(&new[1].uid)]));
+
+        assert_eq!(update.record_links_add.len(), 2);
+        for (link, file) in update.record_links_add.iter().zip(&new) {
+            assert_eq!(link.record_uid, file.uid);
+            assert_eq!(crypto::decrypt_aes_v2(&link.record_key, &parent.key).unwrap(), file.key);
+        }
+    }
+
+    #[test]
+    fn linking_creates_the_file_ref_field_when_the_record_has_none() {
+        let new = new_files();
+        let uid = b64_encode(&[9; 16]);
+        let refs = json!([b64_encode(&new[0].uid), b64_encode(&new[1].uid)]);
+        let field = json!({"type": "fileRef", "value": refs});
+        let sealed_data = |parent: &Record| -> Value {
+            let rq = link_request(parent, &new, RecordKeyType::EncryptedByPublicKey).unwrap();
+            serde_json::from_slice(&crypto::decrypt_aes_v2(&rq.records[0].data, &parent.key).unwrap()).unwrap()
+        };
+
+        let no_file_ref = record(&uid, 3, json!({"title": "A", "fields": [{"type": "login", "value": []}]}), 1);
+        assert_eq!(sealed_data(&no_file_ref)["fields"][1], field);
+        let no_fields = record(&uid, 3, json!({"title": "A"}), 1);
+        assert_eq!(sealed_data(&no_fields)["fields"], json!([field]));
+        let hollow_file_ref = record(&uid, 3, json!({"fields": [{"type": "fileRef"}]}), 1);
+        assert_eq!(sealed_data(&hollow_file_ref)["fields"][1], field, "a field without a value list is not reused");
+
+        let malformed = record(&uid, 3, json!(["not", "an", "object"]), 1);
+        assert!(link_request(&malformed, &new, RecordKeyType::EncryptedByPublicKey).is_err());
+    }
+
+    #[test]
+    fn multipart_form_lists_server_fields_first_and_the_file_last() {
+        let (head, tail) =
+            form_framing(r#"{"key": "a/b", "policy": "p", "success_action_status": 201}"#, "BOUND", "FILEREF").unwrap();
+        assert_eq!(
+            head,
+            "--BOUND\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\na/b\r\n\
+             --BOUND\r\nContent-Disposition: form-data; name=\"policy\"\r\n\r\np\r\n\
+             --BOUND\r\nContent-Disposition: form-data; name=\"success_action_status\"\r\n\r\n201\r\n\
+             --BOUND\r\nContent-Disposition: form-data; name=\"file\"; filename=\"FILEREF\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n"
+        );
+        assert_eq!(tail, "\r\n--BOUND--\r\n");
+        assert!(form_framing("not json", "B", "F").is_err());
+    }
+
+    #[test]
+    fn new_file_uids_never_start_with_a_character_that_looks_like_a_flag() {
+        for _ in 0..2000 {
+            let file = NewFile::random();
+            assert_eq!((file.uid.len(), file.key.len()), (16, 32));
+            assert!(!b64_encode(&file.uid).starts_with(['-', '_']));
+        }
+    }
+
+    #[test]
+    fn upload_attachment_parses_commander_flags_and_its_alias() {
+        let line = ShellLine::try_parse_from(["ua", "--file", "a.txt", "--file", "~/b.txt", "REC"]).unwrap();
+        let Command::UploadAttachment(upload) = line.command else {
+            panic!("`ua` should be upload-attachment");
+        };
+        assert_eq!(upload.files.len(), 2);
+        assert_eq!(upload.record, "REC");
+        assert!(ShellLine::try_parse_from(["upload-attachment", "REC"]).is_err(), "at least one --file");
     }
 }

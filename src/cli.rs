@@ -171,6 +171,9 @@ pub enum Command {
     /// Download record attachments
     #[command(name = "download-attachment", visible_alias = "da")]
     DownloadAttachment(crate::attachment::DownloadAttachment),
+    /// Upload files to a record
+    #[command(name = "upload-attachment", visible_alias = "ua")]
+    UploadAttachment(crate::attachment::UploadAttachment),
     /// Show this device's login settings, or change them
     #[command(name = "this-device")]
     ThisDevice {
