@@ -168,6 +168,17 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format:    Format,
     },
+    /// Add a record to a folder
+    #[command(name = "record-add", visible_alias = "ra")]
+    RecordAdd(crate::record_edit::RecordAdd),
+    /// Update a record
+    #[command(name = "record-update", visible_alias = "ru")]
+    RecordUpdate(crate::record_edit::RecordUpdate),
+    /// Append text to a record's notes
+    #[command(name = "append-notes", visible_alias = "an")]
+    AppendNotes(crate::record_edit::AppendNotes),
+    /// Remove records from your vault, or delete them for everyone with --purge
+    Rm(crate::record_edit::Rm),
     /// Show this device's login settings, or change them
     #[command(name = "this-device")]
     ThisDevice {

@@ -7,6 +7,7 @@ mod error;
 mod generator;
 mod prelude;
 mod proto;
+mod record_edit;
 mod rest;
 mod totp;
 mod vault;
