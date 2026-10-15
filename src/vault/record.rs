@@ -119,28 +119,24 @@ impl Record {
             .find_map(|f| f.values().find(|v| !v.is_null() && v.as_str() != Some("")))
     }
 
-    fn typed_str(&self, field_types: &[&str]) -> Option<&str> {
-        self.typed_value(field_types).and_then(Value::as_str)
-    }
-
     pub fn login(&self) -> Option<&str> {
         match self.kind {
             RecordKind::Legacy { .. } => self.str_field("secret1"),
-            _ => self.typed_str(&["login"]),
+            _ => self.typed_value(&["login"]).and_then(Value::as_str),
         }
     }
 
     pub fn password(&self) -> Option<&str> {
         match self.kind {
             RecordKind::Legacy { .. } => self.str_field("secret2"),
-            _ => self.typed_str(&["password"]),
+            _ => self.typed_value(&["password"]).and_then(Value::as_str),
         }
     }
 
     pub fn url(&self) -> Option<&str> {
         match self.kind {
             RecordKind::Legacy { .. } => self.str_field("link"),
-            _ => self.typed_str(&["url"]),
+            _ => self.typed_value(&["url"]).and_then(Value::as_str),
         }
     }
 
@@ -157,9 +153,9 @@ impl Record {
                     .filter(|field| field.get("field_type").and_then(Value::as_str) == Some("totp"))
                     .filter_map(|field| field.get("data").and_then(Value::as_str))
                     .find(|value| !value.is_empty())
-                    .or_else(|| self.typed_str(&["oneTimeCode", "otp"]))
+                    .or_else(|| self.typed_value(&["oneTimeCode", "otp"]).and_then(Value::as_str))
             }
-            _ => self.typed_str(&["oneTimeCode", "otp"]),
+            _ => self.typed_value(&["oneTimeCode", "otp"]).and_then(Value::as_str),
         }
     }
 

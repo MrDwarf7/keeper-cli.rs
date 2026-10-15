@@ -37,10 +37,6 @@ impl<'a> From<&'a Session> for KeyRing<'a> {
 }
 
 impl KeyRing<'_> {
-    fn open(&self, ciphertext: &[u8], key_type: i32) -> Result<AesKey> {
-        self.open_typed(ciphertext, RecordKeyType::try_from(key_type)?)
-    }
-
     fn open_folder_key(&self, ciphertext: &[u8], key_type: i32) -> Result<AesKey> {
         let key_type = RecordKeyType::try_from(key_type);
         match key_type {
@@ -49,12 +45,12 @@ impl KeyRing<'_> {
                 | RecordKeyType::EncryptedByDataKeyGcm
                 | RecordKeyType::EncryptedByPublicKey
                 | RecordKeyType::EncryptedByPublicKeyEcc),
-            ) => self.open_typed(ciphertext, kind),
+            ) => self.open(ciphertext, kind),
             _ => AesKey::try_from(crypto::decrypt_cbc::<Pkcs7>(ciphertext, self.data_key)?),
         }
     }
 
-    fn open_typed(&self, ciphertext: &[u8], key_type: RecordKeyType) -> Result<AesKey> {
+    fn open(&self, ciphertext: &[u8], key_type: RecordKeyType) -> Result<AesKey> {
         let plain = match key_type {
             RecordKeyType::EncryptedByDataKey => crypto::decrypt_cbc::<Pkcs7>(ciphertext, self.data_key)?,
             RecordKeyType::EncryptedByDataKeyGcm => crypto::decrypt_aes_v2(ciphertext, self.data_key)?,
@@ -102,15 +98,12 @@ pub fn sync_down(session: &mut Session) -> Result<Vault> {
             break;
         }
     }
-    Ok(unlock(Download(pages), &KeyRing::from(&*session)))
-}
-
-pub(super) fn unlock(download: Download, ring: &KeyRing) -> Vault {
-    Unlock::from(download)
-        .open_teams(ring)
-        .open_shared_folders(ring)
-        .key_records(ring)
-        .into_vault(ring)
+    let ring = KeyRing::from(&*session);
+    Ok(Unlock::from(Download(pages))
+        .open_teams(&ring)
+        .open_shared_folders(&ring)
+        .key_records(&ring)
+        .into_vault(&ring))
 }
 
 /// Every page of one full sync.
@@ -153,11 +146,14 @@ impl From<Download> for Unlock<Downloaded> {
 }
 
 impl Unlock<Downloaded> {
-    fn open_teams(self, ring: &KeyRing) -> Unlock<TeamsOpen> {
+    pub(super) fn open_teams(self, ring: &KeyRing) -> Unlock<TeamsOpen> {
         let mut teams = BTreeMap::new();
         let mut team_folder_keys = HashMap::new();
         for team in self.download.0.iter().flat_map(|page| &page.teams) {
-            let Ok(team_key) = ring.open(&team.team_key, team.team_key_type) else {
+            let Ok(key_type) = RecordKeyType::try_from(team.team_key_type) else {
+                continue;
+            };
+            let Ok(team_key) = ring.open(&team.team_key, key_type) else {
                 continue;
             };
             let team_rsa = crypto::decrypt_cbc::<Pkcs7>(&team.team_private_key, &team_key)
@@ -172,7 +168,10 @@ impl Unlock<Downloaded> {
                 ecc:      team_ecc.as_ref(),
             };
             for sfk in &team.shared_folder_keys {
-                if let Ok(key) = team_ring.open(&sfk.shared_folder_key, sfk.key_type) {
+                let Ok(key_type) = RecordKeyType::try_from(sfk.key_type) else {
+                    continue;
+                };
+                if let Ok(key) = team_ring.open(&sfk.shared_folder_key, key_type) {
                     team_folder_keys.insert(Uid::from(sfk.shared_folder_uid.as_slice()), key);
                 }
             }
@@ -213,7 +212,7 @@ fn shared_folder_name(ciphertext: &[u8], key: &AesKey) -> Option<String> {
 }
 
 impl Unlock<TeamsOpen> {
-    fn open_shared_folders(self, ring: &KeyRing) -> Unlock<SharedFoldersOpen> {
+    pub(super) fn open_shared_folders(self, ring: &KeyRing) -> Unlock<SharedFoldersOpen> {
         let TeamsOpen {
             teams,
             mut team_folder_keys,
@@ -289,7 +288,7 @@ impl Unlock<TeamsOpen> {
 }
 
 impl Unlock<SharedFoldersOpen> {
-    fn key_records(self, ring: &KeyRing) -> Unlock<RecordsKeyed> {
+    pub(super) fn key_records(self, ring: &KeyRing) -> Unlock<RecordsKeyed> {
         let SharedFoldersOpen {
             teams,
             mut shared_folders,
@@ -303,7 +302,10 @@ impl Unlock<SharedFoldersOpen> {
             if md.owner {
                 owned.insert(uid.clone());
             }
-            if let Ok(key) = ring.open(&md.record_key, md.record_key_type) {
+            let Ok(key_type) = RecordKeyType::try_from(md.record_key_type) else {
+                continue;
+            };
+            if let Ok(key) = ring.open(&md.record_key, key_type) {
                 record_keys.insert(uid, key);
             }
         }
@@ -364,7 +366,7 @@ impl Unlock<SharedFoldersOpen> {
 }
 
 impl Unlock<RecordsKeyed> {
-    fn into_vault(self, ring: &KeyRing) -> Vault {
+    pub(super) fn into_vault(self, ring: &KeyRing) -> Vault {
         let RecordsKeyed {
             teams,
             shared_folders,

@@ -278,7 +278,7 @@ pub(crate) mod tests {
     use aes::cipher::block_padding::Pkcs7;
     use serde_json::{Value, json};
 
-    use super::unlock::{Download, KeyRing, unlock};
+    use super::unlock::{Download, KeyRing, Unlock};
     use super::*;
     use crate::crypto;
     use crate::proto::records::RecordKeyType;
@@ -434,7 +434,11 @@ pub(crate) mod tests {
             ..Default::default()
         };
 
-        let vault = unlock(Download(vec![page]), &ring);
+        let vault = Unlock::from(Download(vec![page]))
+            .open_teams(&ring)
+            .open_shared_folders(&ring)
+            .key_records(&ring)
+            .into_vault(&ring);
         let titles: Vec<&str> = vault.records.values().map(Record::title).collect();
         assert_eq!(titles.len(), 3, "unreachable record must be dropped: {titles:?}");
         assert!(titles.contains(&"Mine") && titles.contains(&"Shared") && titles.contains(&"Child"));
@@ -559,7 +563,11 @@ pub(crate) mod tests {
             }],
             ..Default::default()
         };
-        let vault = unlock(Download(vec![page]), &ring);
+        let vault = Unlock::from(Download(vec![page]))
+            .open_teams(&ring)
+            .open_shared_folders(&ring)
+            .key_records(&ring)
+            .into_vault(&ring);
         let user = vault.folder(&Location::Folder(Uid::from(&user_uid[..]))).unwrap();
         assert_eq!(user.name, "Fallback user");
         assert!(user.key.is_some());
