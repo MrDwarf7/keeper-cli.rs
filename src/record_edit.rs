@@ -14,6 +14,8 @@
 mod field;
 
 use std::collections::BTreeSet;
+use std::fmt;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, ValueEnum};
@@ -411,13 +413,13 @@ impl Uid {
     }
 }
 
-impl std::fmt::Display for Uid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&b64_encode(&self.0))
     }
 }
 
-impl std::str::FromStr for Uid {
+impl FromStr for Uid {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
@@ -589,12 +591,16 @@ enum Placement {
     },
 }
 
-/// Commander pads record JSON to a multiple of 16 bytes, at least 384, so the ciphertext length
-/// doesn't give the content away.
-fn padded_json(body: &Body) -> Result<Vec<u8>> {
-    let mut json = serde_json::to_vec(body)?;
-    json.resize(json.len().max(384).next_multiple_of(16), b' ');
-    Ok(json)
+/// A record's JSON, padded with spaces to a multiple of 16 bytes and at least 384, as Commander
+/// does, so the ciphertext length doesn't give the content away.
+impl TryFrom<&Body> for Vec<u8> {
+    type Error = Error;
+
+    fn try_from(body: &Body) -> Result<Self> {
+        let mut json = serde_json::to_vec(body)?;
+        json.resize(json.len().max(384).next_multiple_of(16), b' ');
+        Ok(json)
+    }
 }
 
 fn record_add(
@@ -613,7 +619,7 @@ fn record_add(
         record_uid: (&new.uid).into(),
         record_key: crypto::encrypt_aes_v2(&new.key, data_key)?,
         client_modified_time: now,
-        data: crypto::encrypt_aes_v2(&padded_json(&new.body)?, &new.key)?,
+        data: crypto::encrypt_aes_v2(&Vec::<u8>::try_from(&new.body)?, &new.key)?,
         folder_type: folder_type as i32,
         folder_uid,
         folder_key,
@@ -632,7 +638,7 @@ fn record_update(
         record_uid: (&old.uid).into(),
         client_modified_time: now,
         revision: old.revision,
-        data: crypto::encrypt_aes_v2(&padded_json(&old.body)?, &old.key)?,
+        data: crypto::encrypt_aes_v2(&Vec::<u8>::try_from(&old.body)?, &old.key)?,
         record_links_add: added,
         record_links_remove: removed,
         ..pb::RecordUpdate::default()
@@ -817,7 +823,7 @@ fn find(vault: &Vault, cwd: &str, name: &str) -> Result<Vec<Filing>> {
         });
     }
 
-    let (dir, title) = split_name(name);
+    let Name { folder: dir, title } = Name::from(name);
     let lower = title.to_lowercase();
     let mut found = Vec::new();
     if let Some(folder) = resolve_folder(vault, cwd, &dir) {
@@ -858,13 +864,24 @@ fn find(vault: &Vault, cwd: &str, name: &str) -> Result<Vec<Filing>> {
     }
 }
 
-/// Splits `folder/title` at the last `/` that isn't half of an escaped `//`.
-fn split_name(name: &str) -> (String, String) {
-    let masked = name.replace("//", "\0");
-    match masked.rsplit_once('/') {
-        Some(("", title)) => ("/".to_owned(), title.replace('\0', "/")),
-        Some((dir, title)) => (dir.replace('\0', "//"), title.replace('\0', "/")),
-        None => (String::new(), masked.replace('\0', "/")),
+/// A name given to `rm`: `folder/title`, split at the last `/` that isn't half of an escaped `//`.
+struct Name {
+    folder: String,
+    title:  String,
+}
+
+impl From<&str> for Name {
+    fn from(name: &str) -> Self {
+        let masked = name.replace("//", "\0");
+        let (folder, title) = match masked.rsplit_once('/') {
+            Some(("", title)) => ("/".to_owned(), title),
+            Some((dir, title)) => (dir.replace('\0', "//"), title),
+            None => (String::new(), masked.as_str()),
+        };
+        Self {
+            folder,
+            title: title.replace('\0', "/"),
+        }
     }
 }
 
@@ -874,12 +891,23 @@ enum Answer {
     No,
 }
 
+impl FromStr for Answer {
+    type Err = Error;
+
+    fn from_str(typed: &str) -> Result<Self> {
+        match typed.to_lowercase().as_str() {
+            "y" => Ok(Self::Yes),
+            "" | "n" => Ok(Self::No),
+            _ => Err(Error::Generic("invalid input".into())),
+        }
+    }
+}
+
 fn ask(question: &str) -> Result<Answer> {
     loop {
-        match auth::prompt(&format!("{question} [y/n]: "))?.to_lowercase().as_str() {
-            "y" => return Ok(Answer::Yes),
-            "" | "n" => return Ok(Answer::No),
-            _ => eprintln!("Error: invalid input"),
+        match auth::prompt(&format!("{question} [y/n]: "))?.parse() {
+            Ok(answer) => return Ok(answer),
+            Err(_) => eprintln!("Error: invalid input"),
         }
     }
 }
@@ -955,7 +983,7 @@ fn purge(ctx: &mut Ctx, filings: &[Filing], confirm: Confirm) -> Result<()> {
 }
 
 const SYNTAX_HELP: &str = r#"
-Commander supports two types of records:
+There are two types of records:
 1. Typed
 2. Legacy (not editable here; convert the record to a typed one in the Vault)
 

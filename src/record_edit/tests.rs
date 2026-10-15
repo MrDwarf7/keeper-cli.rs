@@ -340,7 +340,7 @@ fn rm_refuses_names_that_match_nothing_or_several_records() {
 }
 
 #[test]
-fn split_name_honours_escaped_slashes() {
+fn names_split_at_the_last_unescaped_slash() {
     for (name, want) in [
         ("Title", ("", "Title")),
         ("A/B/Title", ("A/B", "Title")),
@@ -349,7 +349,8 @@ fn split_name_honours_escaped_slashes() {
         ("A//B", ("", "A/B")),
         ("A//B/C//D", ("A//B", "C/D")),
     ] {
-        assert_eq!(split_name(name), (want.0.to_owned(), want.1.to_owned()), "{name}");
+        let got = Name::from(name);
+        assert_eq!((got.folder.as_str(), got.title.as_str()), want, "{name}");
     }
 }
 

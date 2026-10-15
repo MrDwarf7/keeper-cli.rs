@@ -563,14 +563,13 @@ pub fn apply(body: &mut Body, specs: &[Spec], found: &mut Findings) {
             continue;
         }
         let ty = if spec.ty.is_empty() { "text" } else { spec.ty.as_str() };
-        let def = ty.parse::<Def>().ok();
-        if def.is_none() && !spec.value.is_empty() && !spec.value.starts_with("$JSON") {
+        if ty.parse::<Def>().is_err() && !spec.value.is_empty() && !spec.value.starts_with("$JSON") {
             found
                 .warnings
                 .push(format!("Field type \"{ty}\" is not supported. Field: {ty}.{}", spec.label));
             continue;
         }
-        let Some(slot) = locate(body, spec, ty, def, found) else {
+        let Some(slot) = locate(body, spec, ty, found) else {
             continue;
         };
         if spec.value.is_empty() {
@@ -604,8 +603,10 @@ pub fn apply(body: &mut Body, specs: &[Spec], found: &mut Findings) {
 
 /// Finds the field an edit is about, creating a custom field for a non-empty value that matches
 /// nothing.
-fn locate(body: &mut Body, spec: &Spec, ty: &str, def: Option<Def>, found: &mut Findings) -> Option<Slot> {
+fn locate(body: &mut Body, spec: &Spec, ty: &str, found: &mut Findings) -> Option<Slot> {
     let label = spec.label.to_lowercase();
+    // An unknown type has no rules: labels count and there is no single-field shortcut.
+    let def = ty.parse::<Def>().ok();
     let ignore_label = def.is_some_and(|d| d.multiple == Multiple::Never);
     let matches =
         |f: &Field| (spec.ty.is_empty() || f.ty == spec.ty) && (ignore_label || f.label.to_lowercase() == label);
