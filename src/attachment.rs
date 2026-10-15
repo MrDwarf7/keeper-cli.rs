@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::ffi::OsStr;
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::str::FromStr;
 
@@ -512,8 +512,17 @@ fn download(http: &reqwest::blocking::Client, ticket: &Ticket, key: &[u8], path:
     }
     response.read_to_end(&mut body)?;
     let plain = ticket.cipher.open(&mut body, key)?;
-    std::fs::write(path, plain).map_err(|error| Error::Generic(format!("{}: {error}", path.display())))
-}
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| Error::Generic(format!("{}: {error}", path.display())))?;
+    if let Err(error) = file.write_all(&plain) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(Error::Generic(format!("{}: {error}", path.display())));
+    }
+    Ok(())
 
 /// Upload local files to a typed record.
 #[derive(Args, Debug)]
@@ -1141,6 +1150,44 @@ mod tests {
         );
         server.join().unwrap();
         assert!(!path.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn download_refuses_a_target_created_after_name_selection() {
+        let dir = temp_dir();
+        let path = free_path(&dir, "out.bin", "record", "file");
+        let sentinel = b"keep this file";
+        std::fs::write(&path, sentinel).unwrap();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let key = [8u8; 32];
+        let sealed = crypto::encrypt_aes_v2(b"downloaded plaintext", &key).unwrap();
+        let (url, server) = serve_once("200 OK", sealed);
+        assert!(download(&http, &Ticket { url, cipher: Cipher::Gcm }, &key, &path).is_err());
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), sentinel);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn download_refuses_a_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir();
+        let target = dir.join("sentinel");
+        let path = free_path(&dir, "out.bin", "record", "file");
+        let sentinel = b"keep this file";
+        std::fs::write(&target, sentinel).unwrap();
+        symlink(&target, &path).unwrap();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let key = [8u8; 32];
+        let sealed = crypto::encrypt_aes_v2(b"downloaded plaintext", &key).unwrap();
+        let (url, server) = serve_once("200 OK", sealed);
+        assert!(download(&http, &Ticket { url, cipher: Cipher::Gcm }, &key, &path).is_err());
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), sentinel);
+        assert!(path.is_symlink());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
