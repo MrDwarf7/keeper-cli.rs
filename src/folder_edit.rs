@@ -16,7 +16,7 @@ use crate::commands::{App, Run};
 use crate::crypto::{self, AesKey};
 use crate::prelude::*;
 use crate::uid::Uid;
-use crate::vault::{Folder, FolderKind, Location, Record, Vault};
+use crate::vault::{Folder, FolderKind, Location, PathResolution, Record, Vault};
 
 /// Commander puts at most this many items in one `move` and asks for the command to be repeated.
 const MOVE_LIMIT: usize = 991;
@@ -359,9 +359,8 @@ impl Run for Mv {
         };
         {
             let (session, vault, cwd) = connect(app)?;
-            let dst = vault
-                .resolve_folder(cwd, &dst)
-                .ok_or_else(|| Error::Generic("mv: Destination path should be existing folder".into()))?;
+            let dst = Location::try_from(vault.resolve_path(cwd, &dst))
+                .map_err(|_| Error::Generic("mv: Destination path should be existing folder".into()))?;
             let mut sources = selected(vault, cwd, &src, &dst, matching)?;
             if sources.len() > MOVE_LIMIT {
                 eprintln!("The command limit has been reached. Please repeat this command to resume operation.");
@@ -1032,34 +1031,14 @@ enum Target {
 }
 
 fn locate(vault: &Vault, cwd: &Location, path: &str) -> Target {
-    if let Some(folder) = vault.resolve_folder(cwd, path) {
-        return Target::Folder(folder);
-    }
-    let PathTail { parent, name } = path.into();
-    match vault.resolve_folder(cwd, &parent) {
-        Some(parent) if !name.is_empty() => Target::Within { parent, name },
-        _ => Target::Missing,
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct PathTail {
-    parent: String,
-    name:   String,
-}
-
-impl From<&str> for PathTail {
-    fn from(path: &str) -> Self {
-        let masked = path.replace("//", "\0");
-        let trimmed = masked.trim_end_matches('/');
-        let (parent, name) = match trimmed.rsplit_once('/') {
-            Some(("", name)) => ("/", name),
-            Some(cut) => cut,
-            None => ("", trimmed),
-        };
-        Self {
-            parent: parent.replace('\0', "//"),
-            name:   name.replace('\0', "/"),
+    match vault.resolve_path(cwd, path) {
+        PathResolution::Full(folder) => Target::Folder(folder),
+        PathResolution::Partial { parent, tail } => {
+            let mut components = tail.components.into_iter();
+            match (components.next(), components.next()) {
+                (Some(name), None) => Target::Within { parent, name },
+                _ => Target::Missing,
+            }
         }
     }
 }
@@ -1679,6 +1658,13 @@ mod tests {
             }
         );
         assert_eq!(
+            locate(&fx.vault, &root, "/Work/a//b/New/"),
+            Target::Within {
+                parent: Location::Folder(test_uid("CCCC")),
+                name:   "New".into(),
+            }
+        );
+        assert_eq!(
             locate(&fx.vault, &root, "/New"),
             Target::Within {
                 parent: root.clone(),
@@ -1747,8 +1733,6 @@ mod tests {
         let deletion = serde_json::to_value(Deletion::from((&fx.vault, folder))).unwrap();
         assert_eq!(deletion["delete_resolution"], "unlink");
         assert_eq!(deletion["from_type"], "shared_folder_folder");
-        let path = PathTail::from("A//B/New/");
-        assert_eq!((path.parent, path.name), ("A//B".into(), "New".into()));
         assert!(Glob::new("*prod*db", Case::Ignore).is_match("My prod DB"));
         assert!(!Glob::new("Old*", Case::Exact).is_match("Bold"));
         assert!(Glob::new("a?c", Case::Exact).is_match("abc"));

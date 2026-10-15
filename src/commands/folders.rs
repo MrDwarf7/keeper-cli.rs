@@ -2,7 +2,7 @@ use clap::Args;
 
 use super::{App, Clipped, Detail, Run, Table};
 use crate::folder_edit::{Case, Glob};
-use crate::vault::{FolderKind, Location};
+use crate::vault::{FolderKind, Location, PathResolution};
 
 #[derive(Args, Debug)]
 pub struct Ls {
@@ -45,8 +45,15 @@ impl Run for Ls {
         };
         let detail = Detail::from(self.detail);
         let view = app.view()?;
-        let (root, tail) = view.vault.resolve_path_tail(view.cwd, &self.pattern);
-        let pattern = Glob::new(if tail.is_empty() { "*" } else { &tail }, Case::Ignore);
+        let mut tail = None;
+        let root = match view.vault.resolve_path(view.cwd, &self.pattern) {
+            PathResolution::Full(root) => root,
+            PathResolution::Partial { parent, tail: unresolved } => {
+                tail = Some(unresolved.to_string());
+                parent
+            }
+        };
+        let pattern = Glob::new(tail.as_deref().unwrap_or("*"), Case::Ignore);
         let mut queue = vec![root];
         let mut hits = 0;
         while let Some(folder) = queue.pop() {
@@ -68,7 +75,9 @@ impl Run for Ls {
                 }
             }
         }
-        if hits == 0 && !tail.is_empty() {
+        if hits == 0
+            && let Some(tail) = tail
+        {
             return Err(crate::Error::Generic(format!("{tail}: No such folder or record")));
         }
         Ok(())
@@ -146,9 +155,8 @@ impl Run for Cd {
     fn run(self, app: &mut App) -> crate::Result<()> {
         let target = {
             let view = app.view()?;
-            view.vault
-                .resolve_folder(view.cwd, &self.folder)
-                .ok_or_else(|| crate::Error::Generic(format!("Invalid folder path: {}", self.folder)))?
+            Location::try_from(view.vault.resolve_path(view.cwd, &self.folder))
+                .map_err(|_| crate::Error::Generic(format!("Invalid folder path: {}", self.folder)))?
         };
         let path = app.view()?.vault.path_of(&target);
         app.account.as_mut().ok_or(crate::Error::NotLoggedIn)?.cwd = target;
@@ -192,11 +200,10 @@ impl Run for Tree {
             Labels::Names
         };
         let view = app.view()?;
-        let root = view
-            .vault
-            .resolve_folder(view.cwd, &self.folder)
-            .ok_or_else(|| crate::Error::Generic(format!("Invalid folder path: {}", self.folder)))?;
-        println!("{}", label(view.vault.name_of(&root), &root, labels));
+        let root = Location::try_from(view.vault.resolve_path(view.cwd, &self.folder))
+            .map_err(|_| crate::Error::Generic(format!("Invalid folder path: {}", self.folder)))?;
+        let name = view.vault.folder(&root).map_or("My Vault", |folder| folder.name.as_str());
+        println!("{}", label(name, &root, labels));
         render_tree(view.vault, &root, "", contents, labels);
         Ok(())
     }

@@ -29,7 +29,7 @@ use crate::prelude::*;
 use crate::proto::account_summary::AccountSummaryElements;
 use crate::proto::records as pb;
 use crate::uid::Uid;
-use crate::vault::{FolderKind, Location, RecordKind, Vault};
+use crate::vault::{FolderKind, Location, RecordKind, Vault, VaultPath};
 
 /// Commander removes at most this many records per `pre_delete`/`record_update` request.
 const REMOVE_CHUNK: usize = 999;
@@ -592,9 +592,8 @@ fn verdict(rs: &pb::RecordsModifyResponse, uid: &Uid) -> Result<()> {
 /// Resolves `--folder` (a path or UID) to where a record is filed. A typo must not put credentials
 /// at the root.
 fn placement(vault: &Vault, cwd: &Location, path: &str) -> Result<Placement> {
-    let at = vault
-        .resolve_folder(cwd, path)
-        .ok_or_else(|| Error::Generic(format!("Folder not found: {path}")))?;
+    let at = Location::try_from(vault.resolve_path(cwd, path))
+        .map_err(|_| Error::Generic(format!("Folder not found: {path}")))?;
     let Some(folder) = vault.folder(&at) else {
         return Ok(Placement::Root);
     };
@@ -747,10 +746,17 @@ fn find(vault: &Vault, cwd: &Location, name: &str) -> Result<Vec<Filing>> {
 
     // ponytail: duplicate same-named folders resolve to the first; Commander searches all of them.
     // Walk every match if the vault model gains a duplicate-aware path resolver.
-    let Name { folder: dir, title } = Name::from(name);
+    let mut path = VaultPath::from(name);
+    let title = if path.trailing_separator {
+        path.trailing_separator = false;
+        String::new()
+    } else {
+        path.components.pop().unwrap_or_default()
+    };
     let lower = title.to_lowercase();
     let mut found = Vec::new();
-    if let Some(folder) = vault.resolve_folder(cwd, &dir) {
+    let dir = path.to_string();
+    if let Ok(folder) = Location::try_from(vault.resolve_path(cwd, &dir)) {
         let here = origin(vault, &folder);
         for record in vault
             .records_in(&folder)
@@ -788,26 +794,6 @@ fn find(vault: &Vault, cwd: &Location, name: &str) -> Result<Vec<Filing>> {
     }
 }
 
-/// A name given to `rm`: `folder/title`, split at the last `/` that isn't half of an escaped `//`.
-struct Name {
-    folder: String,
-    title:  String,
-}
-
-impl From<&str> for Name {
-    fn from(name: &str) -> Self {
-        let masked = name.replace("//", "\0");
-        let (folder, title) = match masked.rsplit_once('/') {
-            Some(("", title)) => ("/".to_owned(), title),
-            Some((dir, title)) => (dir.replace('\0', "//"), title),
-            None => (String::new(), masked.as_str()),
-        };
-        Self {
-            folder,
-            title: title.replace('\0', "/"),
-        }
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Answer {
@@ -1070,15 +1056,36 @@ mod tests {
 
     #[test]
     fn rm_names_split_at_the_last_unescaped_slash() {
-        let name = Name::from("/team/a//b/record/title");
-        assert_eq!(name.folder, "/team/a//b/record");
-        assert_eq!(name.title, "title");
-        let root = Name::from("/title");
-        assert_eq!(root.folder, "/");
-        assert_eq!(root.title, "title");
-        let local = Name::from("name");
-        assert_eq!(local.folder, "");
-        assert_eq!(local.title, "name");
+        let mut name = VaultPath::from("/team/a//b/record/title");
+        let title = name.components.pop().unwrap();
+        assert_eq!(name.to_string(), "/team/a//b/record");
+        assert_eq!(title, "title");
+
+        let mut root = VaultPath::from("/title");
+        let title = root.components.pop().unwrap();
+        assert_eq!(root.to_string(), "/");
+        assert_eq!(title, "title");
+
+        let mut local = VaultPath::from("name");
+        let title = local.components.pop().unwrap();
+        assert_eq!(local.to_string(), "");
+        assert_eq!(title, "name");
+
+        let trailing = VaultPath::from("folder/");
+        assert!(trailing.trailing_separator);
+        assert_eq!(trailing.components, ["folder"]);
+
+        let mut vault = crate::vault::tests::sample();
+        let record = "RRRR".parse::<Uid>().unwrap();
+        vault.filed.remove(&Location::Folder("BBBB".parse().unwrap()));
+        vault
+            .filed
+            .entry(Location::Folder("CCCC".parse().unwrap()))
+            .or_default()
+            .insert(record.clone());
+        let found = find(&vault, &Location::Root, "/Work/a//b/DB Admin").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].record, record.to_string());
     }
     #[test]
     fn rm_accepts_padded_record_uids() {

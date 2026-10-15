@@ -86,8 +86,8 @@ impl App {
         let name = self
             .account
             .as_ref()
-            .and_then(|account| account.vault.as_ref().map(|vault| vault.name_of(&account.cwd)))
-            .unwrap_or("My Vault");
+            .and_then(|account| account.vault.as_ref()?.folder(&account.cwd))
+            .map_or("My Vault", |folder| folder.name.as_str());
         format!("{name}> ")
     }
 

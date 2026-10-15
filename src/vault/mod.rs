@@ -1,12 +1,14 @@
 //! The decrypted vault: everything `vault/sync_down` returns that this account can open.
 
 mod folder;
+mod path;
 mod record;
 mod unlock;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub use self::folder::{Folder, FolderKind, Location};
+pub use self::path::{PathAnchor, PathResolution, VaultPath};
 pub use self::record::{Record, RecordKind, Secrets};
 pub use self::unlock::sync_down;
 use crate::crypto::AesKey;
@@ -69,48 +71,34 @@ impl Vault {
         }
     }
 
-    pub fn name_of(&self, at: &Location) -> &str {
-        self.folder(at).map_or("My Vault", |f| &f.name)
-    }
-
-    pub fn parent_of(&self, at: &Location) -> Location {
-        self.folder(at).map(|f| f.parent.clone()).unwrap_or_default()
-    }
-
     /// `/`-joined folder names from the root, with `/` inside names escaped as `//`.
     pub fn path_of(&self, at: &Location) -> String {
-        let mut names = Vec::new();
+        let mut components = Vec::new();
         let mut seen = HashSet::new();
         let mut cursor = self.folder(at);
         while let Some(folder) = cursor {
             if !seen.insert(folder.uid.clone()) {
                 break;
             }
-            names.push(folder.name.replace('/', "//"));
+            components.push(folder.name.clone());
             cursor = self.folder(&folder.parent);
         }
-        names.reverse();
-        format!("/{}", names.join("/"))
+        components.reverse();
+        VaultPath {
+            anchor: PathAnchor::Root,
+            components,
+            trailing_separator: false,
+        }
+        .to_string()
     }
 
-    /// Every location a record is filed under.
-    pub fn locations_of<'a>(&'a self, record: &'a Uid) -> impl Iterator<Item = &'a Location> {
-        self.filed
-            .iter()
-            .filter(move |(_, uids)| uids.contains(record))
-            .map(|(at, _)| at)
-    }
-
-    fn file(&mut self, at: Location, record: Uid) {
-        self.filed.entry(at).or_default().insert(record);
-    }
-}
-
-impl Vault {
     fn resolve_part(&self, at: &Location, part: &str) -> Option<Location> {
         match part {
             "." => Some(at.clone()),
-            ".." => Some(self.parent_of(at)),
+            ".." => Some(match self.folder(at) {
+                Some(folder) => folder.parent.clone(),
+                None => Location::Root,
+            }),
             name => {
                 let children = self.subfolders_of(at);
                 let child = children
@@ -128,35 +116,31 @@ impl Vault {
         }
     }
 
-    fn resolve_parts(&self, mut at: Location, parts: &[String]) -> Option<Location> {
-        for part in parts {
-            at = self.resolve_part(&at, part)?;
-        }
-        Some(at)
-    }
-
-    /// Resolves an absolute or relative Commander path. `//` is a slash in a folder name.
-    pub fn resolve_folder(&self, cwd: &Location, path: &str) -> Option<Location> {
-        let (folder, tail) = self.resolve_path_tail(cwd, path);
-        tail.is_empty().then_some(folder)
-    }
-
-    /// Resolves the deepest existing folder and returns the remaining escaped path.
-    pub fn resolve_path_tail(&self, cwd: &Location, path: &str) -> (Location, String) {
-        if let Ok(uid) = path.parse::<Uid>()
-            && self.folders.contains_key(&uid)
-        {
-            return (Location::Folder(uid), String::new());
-        }
-        let (absolute, parts) = split_path(path);
-        let mut at = if absolute { Location::Root } else { cwd.clone() };
-        for (index, part) in parts.iter().enumerate() {
-            let Some(next) = self.resolve_part(&at, part) else {
-                return (at, encode_path_parts(&parts[index..]));
+    fn resolve_parsed_path(&self, cwd: &Location, mut path: VaultPath) -> PathResolution {
+        let mut at = match path.anchor {
+            PathAnchor::Root => Location::Root,
+            PathAnchor::Current => cwd.clone(),
+        };
+        for index in 0..path.components.len() {
+            let Some(next) = self.resolve_part(&at, &path.components[index]) else {
+                path.components.drain(..index);
+                path.anchor = PathAnchor::Current;
+                path.trailing_separator = false;
+                return PathResolution::Partial { parent: at, tail: path };
             };
             at = next;
         }
-        (at, String::new())
+        PathResolution::Full(at)
+    }
+
+    /// Resolves an absolute or relative Commander path. `//` is a slash in a folder name.
+    pub fn resolve_path(&self, cwd: &Location, path: &str) -> PathResolution {
+        if let Ok(uid) = path.parse::<Uid>()
+            && self.folders.contains_key(&uid)
+        {
+            return PathResolution::Full(Location::Folder(uid));
+        }
+        self.resolve_parsed_path(cwd, path.into())
     }
 
     pub fn resolve_record<'a>(&'a self, cwd: &Location, spec: &str) -> Option<&'a Record> {
@@ -165,13 +149,9 @@ impl Vault {
         {
             return Some(record);
         }
-        let (absolute, mut parts) = split_path(spec);
-        let title = parts.pop()?;
-        let folder = if parts.is_empty() && !absolute {
-            cwd.clone()
-        } else {
-            self.resolve_parts(if absolute { Location::Root } else { cwd.clone() }, &parts)?
-        };
+        let mut path = VaultPath::from(spec);
+        let title = path.components.pop()?;
+        let folder = Location::try_from(self.resolve_parsed_path(cwd, path)).ok()?;
         self.records_in(&folder)
             .find(|record| record.title() == title)
             .or_else(|| {
@@ -180,6 +160,17 @@ impl Vault {
             })
     }
 
+    /// Every location a record is filed under.
+    pub fn locations_of<'a>(&'a self, record: &'a Uid) -> impl Iterator<Item = &'a Location> {
+        self.filed
+            .iter()
+            .filter(move |(_, uids)| uids.contains(record))
+            .map(|(at, _)| at)
+    }
+
+}
+
+impl Vault {
     /// Builds sorted folder links and breaks cycles at their lowest UID.
     fn link_tree(&mut self) {
         let known: HashSet<Uid> = self.folders.keys().cloned().collect();
@@ -241,37 +232,6 @@ impl Vault {
     }
 }
 
-/// Split Commander paths, where `//` escapes a literal slash in one component.
-fn split_path(path: &str) -> (bool, Vec<String>) {
-    let leading_slashes = path.chars().take_while(|ch| *ch == '/').count();
-    let absolute = leading_slashes % 2 == 1;
-    let path = if absolute { &path[1..] } else { path };
-    let mut parts = Vec::new();
-    let mut part = String::new();
-    let mut chars = path.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '/' {
-            part.push(ch);
-        } else if chars.peek() == Some(&'/') {
-            chars.next();
-            part.push('/');
-        } else if !part.is_empty() {
-            parts.push(std::mem::take(&mut part));
-        }
-    }
-    if !part.is_empty() {
-        parts.push(part);
-    }
-    (absolute, parts)
-}
-
-fn encode_path_parts(parts: &[String]) -> String {
-    parts
-        .iter()
-        .map(|part| part.replace('/', "//"))
-        .collect::<Vec<_>>()
-        .join("/")
-}
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -337,7 +297,7 @@ pub(crate) mod tests {
                 udata:                None,
             },
         );
-        vault.file(Location::Folder(uid("BBBB")), uid("RRRR"));
+        vault.filed.entry(Location::Folder(uid("BBBB"))).or_default().insert(uid("RRRR"));
         vault
     }
 
@@ -450,7 +410,10 @@ pub(crate) mod tests {
         assert_eq!(vault.subfolders_of(&Location::Root), [Uid::from(&f_user[..])]);
         assert_eq!(vault.path_of(&deep), "/Work/Data name/Deep");
         let shared_root = Location::Folder(Uid::from(&f_sf[..]));
-        assert_eq!(vault.name_of(&shared_root), "Data name");
+        assert_eq!(
+            vault.folder(&shared_root).map_or("My Vault", |folder| folder.name.as_str()),
+            "Data name"
+        );
         assert_eq!(
             vault
                 .folder(&shared_root)
@@ -465,7 +428,7 @@ pub(crate) mod tests {
         assert_eq!(vault.records_in(&Location::Root).map(Record::title).collect::<Vec<_>>(), ["Mine"]);
     }
     #[test]
-    fn escaped_paths_and_deepest_tail_resolve() {
+    fn virtual_paths_resolve_escaped_names_and_unresolved_tails() {
         let mut vault = sample();
         let slash_uid = "DDDD".parse::<Uid>().unwrap();
         vault.folders.insert(
@@ -480,18 +443,67 @@ pub(crate) mod tests {
                 key:        Some(AesKey::random()),
             },
         );
+        let padded_uid = Uid::from(&[9u8; 16][..]);
+        vault.folders.insert(
+            padded_uid.clone(),
+            Folder {
+                uid:        padded_uid.clone(),
+                name:       "padded UID".into(),
+                data:       serde_json::json!({"name": "padded UID"}),
+                kind:       FolderKind::User,
+                parent:     Location::Root,
+                subfolders: Vec::new(),
+                key:        Some(AesKey::random()),
+            },
+        );
         vault.link_tree();
-        let cwd = Location::Root;
-        let escaped = vault.resolve_folder(&cwd, "/Work/a//b").unwrap();
+        let root = Location::Root;
+        let escaped = Location::try_from(vault.resolve_path(&root, "/Work/a//b")).unwrap();
         assert_eq!(vault.path_of(&escaped), "/Work/a//b");
         let slash_path = vault.path_of(&Location::Folder(slash_uid.clone()));
         assert_eq!(slash_path, "///leading");
-        assert_eq!(vault.resolve_folder(&cwd, &slash_path), Some(Location::Folder(slash_uid)));
-        let (folder, tail) = vault.resolve_path_tail(&cwd, "/Work/Infra/missing/a//b");
-        assert_eq!(folder, Location::Folder("BBBB".parse().unwrap()));
-        assert_eq!(tail, "missing/a//b");
-        assert!(vault.resolve_folder(&cwd, "/Work/Infra/missing/a//b").is_none());
-        assert_eq!(vault.resolve_record(&cwd, "/Work/Infra/DB Admin").unwrap().title(), "DB Admin");
+        assert_eq!(
+            Location::try_from(vault.resolve_path(&root, &slash_path)),
+            Ok(Location::Folder(slash_uid))
+        );
+        assert_eq!(
+            Location::try_from(vault.resolve_path(&root, "BBBB")),
+            Ok(Location::Folder("BBBB".parse().unwrap()))
+        );
+        let padded_path = format!("{padded_uid}==");
+        assert_eq!(
+            Location::try_from(vault.resolve_path(&root, &padded_path)),
+            Ok(Location::Folder(padded_uid))
+        );
+        assert_eq!(Location::try_from(vault.resolve_path(&root, "/")), Ok(Location::Root));
+        assert_eq!(
+            Location::try_from(vault.resolve_path(&Location::Folder("AAAA".parse().unwrap()), "")),
+            Ok(Location::Folder("AAAA".parse().unwrap()))
+        );
+
+        let partial = vault.resolve_path(&root, "/Work/Infra/missing/a//b");
+        let PathResolution::Partial { parent, tail } = &partial else {
+            panic!("expected a partial path resolution");
+        };
+        assert_eq!(parent, &Location::Folder("BBBB".parse().unwrap()));
+        assert_eq!(tail.to_string(), "missing/a//b");
+        assert_eq!(tail.components, ["missing".to_owned(), "a/b".to_owned()]);
+        assert_eq!(
+            Location::try_from(partial),
+            Err(VaultPath::from("missing/a//b"))
+        );
+        assert_eq!(
+            Location::try_from(vault.resolve_path(
+                &Location::Folder("AAAA".parse().unwrap()),
+                "../work/infra"
+            )),
+            Ok(Location::Folder("BBBB".parse().unwrap()))
+        );
+        assert_eq!(vault.resolve_record(&root, "/Work/Infra/DB Admin").unwrap().title(), "DB Admin");
+        assert_eq!(
+            vault.resolve_record(&root, "/Work/Infra/DB Admin/").unwrap().title(),
+            "DB Admin"
+        );
     }
 
     #[test]

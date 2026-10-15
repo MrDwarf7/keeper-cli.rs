@@ -305,7 +305,7 @@ fn select_records<'v>(vault: &'v Vault, cwd: &Location, specs: &[String], depth:
     for spec in specs {
         if let Some(record) = vault.records.get(spec.as_str()) {
             found.insert(&record.uid, record);
-        } else if let Some(folder) = vault.resolve_folder(cwd, spec) {
+        } else if let Ok(folder) = Location::try_from(vault.resolve_path(cwd, spec)) {
             for location in folder_tree(vault, folder, depth) {
                 for record in vault.records_in(&location) {
                     found.insert(&record.uid, record);

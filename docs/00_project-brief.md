@@ -14,6 +14,9 @@ shell.
 The authenticated account owns its session, cached vault, and current folder as
 one unit, so switching accounts cannot reuse another account's local state.
 
+Vault paths use Commander's `//` escaping for `/` inside folder names; they are
+virtual paths, not operating-system filesystem paths.
+
 Keeper does not publish `.proto` files or a protocol specification. Protocol
 behavior is derived from descriptors embedded in Commander's generated Python
 modules and from Commander's source.

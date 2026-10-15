@@ -525,7 +525,11 @@ fn unlock_folders(
 
 fn file_records(download: &Download, vault: &mut Vault) {
     for folder in download.0.iter().flat_map(|page| &page.user_folder_records) {
-        vault.file(Location::from(folder.folder_uid.as_slice()), Uid::from(folder.record_uid.as_slice()));
+        vault
+            .filed
+            .entry(Location::from(folder.folder_uid.as_slice()))
+            .or_default()
+            .insert(Uid::from(folder.record_uid.as_slice()));
     }
     for record in download.0.iter().flat_map(|page| &page.shared_folder_folder_records) {
         let folder_uid = if record.folder_uid.is_empty() {
@@ -533,6 +537,10 @@ fn file_records(download: &Download, vault: &mut Vault) {
         } else {
             &record.folder_uid
         };
-        vault.file(Location::from(folder_uid.as_slice()), Uid::from(record.record_uid.as_slice()));
+        vault
+            .filed
+            .entry(Location::from(folder_uid.as_slice()))
+            .or_default()
+            .insert(Uid::from(record.record_uid.as_slice()));
     }
 }
