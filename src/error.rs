@@ -22,6 +22,16 @@ impl std::fmt::Display for ApiFailure {
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("{context}: {source}")]
+    Context {
+        context: String,
+        #[source]
+        source:  Box<Error>,
+    },
+
+    #[error("attachment download failed with {} error(s)", .failures.len())]
+    DownloadBatch { failures: Vec<Error> },
+
     #[error("{0}")]
     Generic(String),
 
@@ -42,6 +52,21 @@ pub enum Error {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error("invalid UTF-8: {0}")]
+    Utf8(#[from] std::string::FromUtf8Error),
+
+    #[error("integer conversion: {0}")]
+    Integer(#[from] std::num::TryFromIntError),
+
+    #[error("invalid integer: {0}")]
+    ParseInt(#[from] std::num::ParseIntError),
+
+    #[error("invalid base64 data: {0}")]
+    Base64(#[from] data_encoding::DecodeError),
+
+    #[error("allocation failed: {0}")]
+    Allocation(#[from] std::collections::TryReserveError),
 
     #[error(transparent)]
     Json(#[from] serde_json::Error),

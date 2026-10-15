@@ -33,6 +33,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub server: Option<String>,
 
+    /// Show detailed error diagnostics
+    #[arg(long, global = true)]
+    pub debug: bool,
+
     /// Command to run; starts the interactive shell when omitted
     #[command(subcommand)]
     pub command: Option<Command>,

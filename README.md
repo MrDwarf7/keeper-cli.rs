@@ -92,9 +92,16 @@ administrator policy can disable persistent login.
 | `--user <EMAIL>`        | `KEEPER_USER`        | Account email                                       |
 | `--password <PASSWORD>` | `KEEPER_PASSWORD`    | Master password; prompted for when omitted          |
 | `--server <HOST>`       | `KEEPER_SERVER`      | Keeper region host, for example `keepersecurity.eu` |
+| `--debug`               |                      | Show error context and complete cause chains        |
 
 Treat command-line and environment values as secrets. Prefer interactive prompts
 when possible.
+
+Release builds use concise error output by default. Add `--debug` to show
+contextual cause chains, including each failure in a partial attachment
+download. Debug builds enable those diagnostics automatically. HTTP URL
+credentials, query strings, fragments, and API supplemental data are omitted
+from reports.
 
 ## Configuration
 
