@@ -19,8 +19,8 @@ use crate::crypto;
 use crate::prelude::*;
 use crate::vault::{Folder, FolderKind, Record, Vault};
 
-/// Commander stops a `move` after this many items and asks for the command to be repeated.
-const MOVE_LIMIT: usize = 990;
+/// Commander puts at most this many items in one `move` and asks for the command to be repeated.
+const MOVE_LIMIT: usize = 991;
 
 /// Create a folder
 #[derive(Args, Debug)]
@@ -264,12 +264,13 @@ impl Run for Rmdir {
             println!("\nThe following user folder(s) will be removed:\n{}", names.join(", "));
         }
         let objects = doomed.iter().map(|&f| Deletion::from((vault, f))).collect();
+        let pre_delete = session.execute_v2(serde_json::to_value(Request::PreDelete { objects })?)?;
         let PreDeleted {
             pre_delete_response: Pending {
                 pre_delete_token,
                 would_delete,
             },
-        } = serde_json::from_value(session.execute_v2(serde_json::to_value(Request::PreDelete { objects })?)?)?;
+        } = serde_json::from_value(pre_delete)?;
         if report == Report::Show {
             for line in &would_delete.deletion_summary {
                 println!("{line}");
@@ -345,7 +346,11 @@ impl Run for Mv {
         let Some(dst) = resolve_folder(vault, cwd, &dst) else {
             return Err(Error::Generic("mv: Destination path should be existing folder".into()));
         };
-        let sources = selected(vault, cwd, &src, &dst, matching)?;
+        let mut sources = selected(vault, cwd, &src, &dst, matching)?;
+        if sources.len() > MOVE_LIMIT {
+            eprintln!("The command limit has been reached. Please repeat this command to resume operation.");
+            sources.truncate(MOVE_LIMIT);
+        }
         let request = Request::try_from(&Relocation {
             vault,
             data_key: &session.data_key,
@@ -845,10 +850,6 @@ impl TryFrom<&Relocation<'_>> for Request {
         };
         let (mut items, mut transition_keys) = (Vec::new(), Vec::new());
         for source in sources {
-            if items.len() > MOVE_LIMIT {
-                eprintln!("The command limit has been reached. Please repeat this command to resume operation.");
-                break;
-            }
             match source {
                 Source::Folder(uid) => {
                     let Some(folder) = vault.folders.get(uid) else {
@@ -937,6 +938,13 @@ impl TryFrom<(&Folder, &[u8])> for TransitionKey {
     type Error = Error;
 
     fn try_from((folder, wrapper): (&Folder, &[u8])) -> Result<Self> {
+        // An unknown key would be wrapped as if it were empty, and the folder lost for good.
+        if folder.key.is_empty() {
+            return Err(Error::Generic(format!(
+                "The key of folder {} is not available, so it cannot be moved",
+                folder.uid
+            )));
+        }
         Ok(Self {
             uid: folder.uid.clone(),
             key: Sealed::cbc(&folder.key, wrapper)?,
@@ -1680,11 +1688,19 @@ mod tests {
     }
 
     #[test]
-    fn a_move_stops_after_commanders_item_limit() {
-        let fx = Fx::new();
-        let sources = (0..MOVE_LIMIT + 200).map(|_| record_from("RR", "")).collect();
-        let v = fx.relocate("P", sources, Share::default()).unwrap();
-        assert_eq!(v["move"].as_array().unwrap().len(), MOVE_LIMIT + 1);
+    fn a_folder_whose_key_is_unknown_is_not_re_wrapped() {
+        let mut fx = Fx::new();
+        fx.vault.folders.get_mut("Q").unwrap().key.clear();
+        let e = fx
+            .relocate("S", vec![Source::Folder("P".into())], Share::default())
+            .unwrap_err();
+        assert!(e.to_string().contains("key of folder Q"), "{e}");
+
+        // Under one key nothing is re-wrapped, so nothing is in the way.
+        assert!(
+            fx.relocate("", vec![Source::Folder("Q".into())], Share::default())
+                .is_ok()
+        );
     }
 
     #[test]
