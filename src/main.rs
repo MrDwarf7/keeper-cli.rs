@@ -5,6 +5,7 @@ mod error;
 mod prelude;
 mod proto;
 mod rest;
+mod vault;
 
 pub use crate::error::{Error, Result};
 

@@ -603,7 +603,7 @@ impl LoginFlow<'_> {
         }
     }
 
-    fn finish(mut self, resp: LoginResponse) -> Result<Session> {
+    fn finish(self, resp: LoginResponse) -> Result<Session> {
         let data_key = match EncryptedDataKeyType::try_from(resp.encrypted_data_key_type) {
             Ok(EncryptedDataKeyType::ByDevicePublicKey) => crypto::decrypt_ec(&resp.encrypted_data_key, &self.device_key()?)?,
             Ok(EncryptedDataKeyType::ByPassword) => {
