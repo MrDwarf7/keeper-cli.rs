@@ -569,6 +569,7 @@ struct New {
 }
 
 /// A record about to be changed, as the vault holds it.
+#[derive(Debug)]
 struct Existing {
     uid:      Uid,
     key:      Vec<u8>,
@@ -577,6 +578,7 @@ struct Existing {
 }
 
 /// Where a new record is filed, with the key that makes it readable through a shared folder.
+#[derive(Debug, PartialEq)]
 enum Placement {
     Root,
     Private(Uid),
@@ -1014,7 +1016,7 @@ $GEN:[alg],[n]          password           Generates a random password      $GEN
                                            alg: rand (default); n: length
 $GEN                    oneTimeCode        Generates a TOTP URL
 $BASE64:<BASE64>        any string field   Decodes a base64 value           password=$BASE64:ZmpzemRmaGtkZg==
-                                           Useful for passwords with        Decodes to: fjzskfhkdf
+                                           Useful for passwords with        Decodes to: fjszdfhkdf
                                            special characters
 $JSON:<JSON TEXT>       any object         Sets a field value as JSON       phone.Cell=$JSON:'{"number": "(555) 555-1234", "type": "Mobile"}'
 
