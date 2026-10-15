@@ -383,7 +383,6 @@ fn render_value(v: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
 
     use super::*;
 
@@ -405,12 +404,12 @@ mod tests {
     fn legacy_record_fields_and_totp_come_from_data_and_extra() {
         let r = record(
             RecordKind::Legacy {
-                extra: Some(json!({"fields": [
+                extra: Some(serde_json::json!({"fields": [
                     {"field_type": "totp", "data": ""},
                     {"field_type": "totp", "data": "otpauth://totp/x?secret=AAAA"}
                 ]})),
             },
-            json!({"title": "Old", "secret1": "bob", "secret2": "pw", "link": "https://x", "custom": [{"name": "PIN", "value": "1234"}]}),
+            serde_json::json!({"title": "Old", "secret1": "bob", "secret2": "pw", "link": "https://x", "custom": [{"name": "PIN", "value": "1234"}]}),
         );
         assert_eq!(r.description(), "bob @ https://x");
         assert_eq!(r.record_type(), "general");
@@ -428,7 +427,7 @@ mod tests {
     fn typed_totp_skips_empty_fields_and_falls_back_to_custom() {
         let r = record(
             RecordKind::Typed,
-            json!({"title": "T", "type": "login",
+            serde_json::json!({"title": "T", "type": "login",
                    "fields": [{"type": "oneTimeCode", "value": [""]}],
                    "custom": [{"type": "otp", "value": "otpauth://totp/c?secret=BBBB"}]}),
         );
@@ -439,7 +438,7 @@ mod tests {
     fn legacy_totp_falls_back_to_nonempty_custom_field() {
         let r = record(
             RecordKind::Legacy { extra: None },
-            json!({"custom": [{"type": "otp", "value": "otpauth://totp/c?secret=CCCC"}]}),
+            serde_json::json!({"custom": [{"type": "otp", "value": "otpauth://totp/c?secret=CCCC"}]}),
         );
         assert_eq!(r.totp_url(), Some("otpauth://totp/c?secret=CCCC"));
     }
@@ -447,7 +446,7 @@ mod tests {
     fn card_description_keeps_last_four_on_multibyte_numbers() {
         let r = record(
             RecordKind::Typed,
-            json!({"type": "bankCard", "fields": [{"type": "paymentCard", "value": [{"cardNumber": "４１１１1234"}]}]}),
+            serde_json::json!({"type": "bankCard", "fields": [{"type": "paymentCard", "value": [{"cardNumber": "４１１１1234"}]}]}),
         );
         assert_eq!(r.description(), "*1234");
     }
@@ -455,7 +454,7 @@ mod tests {
     fn scalar_typed_fields_render_and_sensitive_types_are_masked() {
         let r = record(
             RecordKind::Typed,
-            json!({"type": "note", "fields": [
+            serde_json::json!({"type": "note", "fields": [
                 {"type": "login", "value": "alice"},
                 {"type": "password", "value": "pass"},
                 {"type": "paymentCard", "value": {"cardNumber": "4111111111111111"}},

@@ -276,7 +276,7 @@ impl Vault {
 #[cfg(test)]
 pub(crate) mod tests {
     use aes::cipher::block_padding::Pkcs7;
-    use serde_json::{Value, json};
+    use serde_json::Value;
 
     use super::unlock::{Download, KeyRing, Unlock};
     use super::*;
@@ -305,7 +305,7 @@ pub(crate) mod tests {
                 Folder {
                     uid: uid(id),
                     name: name.into(),
-                    data: json!({"name": name}),
+                    data: serde_json::json!({"name": name}),
                     kind: FolderKind::User,
                     parent,
                     subfolders: kids.iter().map(|k| uid(k)).collect(),
@@ -328,7 +328,7 @@ pub(crate) mod tests {
             Record {
                 uid:                  uid("RRRR"),
                 kind:                 RecordKind::Typed,
-                data:                 json!({"title": "DB Admin", "type": "login"}),
+                data:                 serde_json::json!({"title": "DB Admin", "type": "login"}),
                 revision:             1,
                 shared:               false,
                 client_modified_time: 0,
@@ -396,11 +396,11 @@ pub(crate) mod tests {
                 v3_record(
                     &r_own,
                     &k_own,
-                    json!({"title": "Mine", "type": "login", "fields": [{"type": "login", "value": ["me"]}]}),
+                    serde_json::json!({"title": "Mine", "type": "login", "fields": [{"type": "login", "value": ["me"]}]}),
                 ),
-                v3_record(&r_shared, &k_shared, json!({"title": "Shared", "type": "login"})),
-                v3_record(&r_child, &k_child, json!({"title": "Child", "type": "file"})),
-                v3_record(&[9u8; 16], &AesKey::random(), json!({"title": "Unreachable"})),
+                v3_record(&r_shared, &k_shared, serde_json::json!({"title": "Shared", "type": "login"})),
+                v3_record(&r_child, &k_child, serde_json::json!({"title": "Child", "type": "file"})),
+                v3_record(&[9u8; 16], &AesKey::random(), serde_json::json!({"title": "Unreachable"})),
             ],
             user_folders: vec![UserFolder {
                 folder_uid: f_user.to_vec(),
@@ -473,7 +473,7 @@ pub(crate) mod tests {
             Folder {
                 uid:        slash_uid.clone(),
                 name:       "/leading".into(),
-                data:       json!({"name": "/leading"}),
+                data:       serde_json::json!({"name": "/leading"}),
                 kind:       FolderKind::User,
                 parent:     Location::Root,
                 subfolders: Vec::new(),
@@ -526,7 +526,11 @@ pub(crate) mod tests {
                 record_key_type: 999,
                 ..Default::default()
             }],
-            records: vec![v3_record(&record_uid, &user_key, json!({"title": "locked record"}))],
+            records: vec![v3_record(
+                &record_uid,
+                &user_key,
+                serde_json::json!({"title": "locked record"}),
+            )],
             shared_folders: vec![PbSharedFolder {
                 shared_folder_uid: shared_uid.to_vec(),
                 shared_folder_key: crypto::encrypt_cbc::<Pkcs7>(&shared_key, &data_key).unwrap(),

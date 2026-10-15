@@ -6,8 +6,6 @@ pub mod generate;
 pub mod records;
 pub mod session;
 
-use std::fmt;
-
 use serde_json::Value;
 
 use crate::auth::{self, Password, Session};
@@ -197,8 +195,8 @@ impl Extend<Vec<String>> for Table {
     }
 }
 
-impl fmt::Display for Table {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Table {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.rows.is_empty() {
             return writeln!(f, "No results");
         }
@@ -252,8 +250,8 @@ impl fmt::Display for Table {
 /// `shared_folder_uid` renders as `Shared Folder UID`.
 struct ColumnTitle<'a>(&'a str);
 
-impl fmt::Display for ColumnTitle<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for ColumnTitle<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let words: Vec<String> = self
             .0
             .split('_')
@@ -276,8 +274,8 @@ impl fmt::Display for ColumnTitle<'_> {
 /// Right-aligned `label: value`, continuing multi-line values under the value column.
 pub struct DetailLine<'a>(pub &'a str, pub &'a str);
 
-impl fmt::Display for DetailLine<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for DetailLine<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut lines = self.1.lines();
         writeln!(f, "{:>20}: {}", self.0, lines.next().unwrap_or_default())?;
         for line in lines {
@@ -290,8 +288,8 @@ impl fmt::Display for DetailLine<'_> {
 /// Truncates to `width` characters with a trailing ellipsis, as Commander's tables do.
 pub struct Clipped<'a>(pub &'a str, pub usize);
 
-impl fmt::Display for Clipped<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Clipped<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self(text, width) = *self;
         if text.chars().count() <= width {
             f.write_str(text)

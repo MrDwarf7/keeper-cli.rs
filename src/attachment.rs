@@ -6,16 +6,15 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::ffi::OsStr;
-use std::fmt;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time;
 
 use aes::cipher::block_padding::Pkcs7;
 use clap::Args;
 use prost::Message;
-use reqwest::blocking::{Body, Client};
+use reqwest::blocking;
 use serde_json::{Value, json};
 
 use crate::auth::Session;
@@ -233,10 +232,10 @@ fn connected(app: &mut App) -> Result<(&mut Session, &Vault)> {
 }
 
 /// Large attachments can legitimately take minutes; only the connection is time-limited.
-fn http_client() -> Result<Client> {
-    Ok(Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(None::<Duration>)
+fn http_client() -> Result<blocking::Client> {
+    Ok(blocking::Client::builder()
+        .connect_timeout(time::Duration::from_secs(15))
+        .timeout(None::<time::Duration>)
         .build()?)
 }
 
@@ -501,7 +500,7 @@ fn access_folder<'v>(vault: &'v Vault, record: &Record) -> Option<&'v str> {
 }
 
 /// Fetch and authenticate a signed download before writing any plaintext to disk.
-fn download(http: &Client, ticket: &Ticket, key: &[u8], path: &Path) -> Result<()> {
+fn download(http: &blocking::Client, ticket: &Ticket, key: &[u8], path: &Path) -> Result<()> {
     let mut response = http.get(&ticket.url).send()?;
     if !response.status().is_success() {
         return Err(Error::Generic(format!("HTTP status code {}", response.status().as_u16())));
@@ -587,8 +586,8 @@ impl From<&Path> for MimeType {
     }
 }
 
-impl fmt::Display for MimeType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for MimeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.0)
     }
 }
@@ -722,15 +721,15 @@ fn form_framing(parameters: &str, boundary: &str, file_ref: &str) -> Result<(Str
     Ok((head, format!("\r\n--{boundary}--\r\n")))
 }
 
-fn send(http: &Client, target: &FileAddStatus, file: &LocalFile, new: &NewFile) -> Result<()> {
+fn send(http: &blocking::Client, target: &FileAddStatus, file: &LocalFile, new: &NewFile) -> Result<()> {
     let frame = sealed(file, &new.key)?;
     let boundary = data_encoding::HEXLOWER.encode(&crypto::random_bytes(16));
     let (head, tail) = form_framing(&target.parameters, &boundary, &b64_encode(&new.uid))?;
     let len = (head.len() + frame.len() + tail.len()) as u64;
-    let body = Body::sized(
-        Cursor::new(head.into_bytes())
-            .chain(Cursor::new(frame))
-            .chain(Cursor::new(tail.into_bytes())),
+    let body = blocking::Body::sized(
+        std::io::Cursor::new(head.into_bytes())
+            .chain(std::io::Cursor::new(frame))
+            .chain(std::io::Cursor::new(tail.into_bytes())),
         len,
     );
     let response = http
@@ -788,8 +787,8 @@ fn link_request(record: &Record, new: &[NewFile], key_type: RecordKeyType) -> Re
 }
 
 fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
 }
 
@@ -1051,16 +1050,20 @@ mod tests {
         let url = format!("http://{}/blob", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
             listener.set_nonblocking(true).unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let mut stream = loop {
                 match listener.accept() {
                     Ok((stream, _)) => break stream,
-                    Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+                    Err(_) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(5))
+                    }
                     Err(error) => panic!("no client connected: {error}"),
                 }
             };
             stream.set_nonblocking(false).unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
             let mut request = Vec::new();
             let mut chunk = [0; 16 * 1024];
             let mut total = None;
@@ -1091,7 +1094,7 @@ mod tests {
     fn download_http_authenticates_before_writing_plaintext() {
         let dir = temp_dir();
         let path = dir.join("out.bin");
-        let http = Client::builder().no_proxy().build().unwrap();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
         let key = [8u8; 32];
         let plain: Vec<u8> = (0..=255u8).cycle().take(70_000).collect();
         for (cipher, sealed) in [
@@ -1151,7 +1154,7 @@ mod tests {
             uid: vec![5; 16],
             key: key(9),
         };
-        let http = Client::builder().no_proxy().build().unwrap();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
         let (url, server) = serve_once("201 Created", Vec::new());
         let target = FileAddStatus {
             url,

@@ -161,7 +161,7 @@ impl Unlock<Downloaded> {
                 .ok();
             let team_ecc = crypto::decrypt_aes_v2(&team.team_ecc_private_key, &team_key)
                 .ok()
-                .and_then(|raw| SecretKey::from_slice(&raw).ok());
+                .and_then(|raw| p256::SecretKey::from_slice(&raw).ok());
             let team_ring = KeyRing {
                 data_key: &team_key,
                 rsa:      team_rsa.as_ref(),

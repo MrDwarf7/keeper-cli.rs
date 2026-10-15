@@ -1,7 +1,6 @@
 //! Keeper UIDs: random bytes on the wire, URL-safe unpadded base64 everywhere a user sees them.
 
 use std::borrow::Borrow;
-use std::fmt;
 use std::str::FromStr;
 
 use crate::prelude::*;
@@ -30,8 +29,8 @@ impl From<&Uid> for Vec<u8> {
     }
 }
 
-impl fmt::Display for Uid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Uid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }

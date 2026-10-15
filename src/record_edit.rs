@@ -15,17 +15,17 @@ mod field;
 
 use std::collections::BTreeSet;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time;
 
 use clap::{Args, ValueEnum};
 use field::{Body, Findings, Labels, NotesEdit, Spec, TypeDef};
 use prost::Message;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::auth::{self, Session};
 use crate::commands::{App, Run};
-use crate::crypto::{self, AesKey};
+use crate::crypto::AesKey;
 use crate::prelude::*;
 use crate::proto::account_summary::AccountSummaryElements;
 use crate::proto::records as pb;
@@ -334,7 +334,7 @@ fn with_vault<T>(app: &mut App, job: impl FnOnce(&mut Ctx<'_>) -> Result<T>) -> 
 /// Keeper UIDs are 16 random bytes, shown as unpadded URL-safe base64. Keep the first character
 /// away from `-` and `_` so a UID never looks like an option.
 fn random_uid() -> Uid {
-    let mut bytes = crypto::random_bytes(16);
+    let mut bytes = crate::crypto::random_bytes(16);
     if bytes[0] & 0xf8 == 0xf8 {
         bytes[0] &= 0x7f;
     }
@@ -342,8 +342,8 @@ fn random_uid() -> Uid {
 }
 
 fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    time::SystemTime::now()
+        .duration_since(time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
@@ -391,7 +391,7 @@ fn create(ctx: &mut Ctx<'_>, add: &Add) -> Result<()> {
     verdict(&rs, &new.uid)?;
     match add.format {
         OutputFormat::Text => println!("{}", new.uid),
-        OutputFormat::Json => println!("{}", json!({ "record_uid": new.uid.to_string() })),
+        OutputFormat::Json => println!("{}", serde_json::json!({ "record_uid": new.uid.to_string() })),
     }
     Ok(())
 }
@@ -527,13 +527,15 @@ fn record_add(
     let (folder_type, folder_uid, folder_key) = match place {
         Placement::Root => (pb::RecordFolderType::UserFolder, Vec::new(), Vec::new()),
         Placement::Private(folder) => (pb::RecordFolderType::UserFolder, folder.into(), Vec::new()),
-        Placement::Shared { folder, kind, key } => (*kind, folder.into(), crypto::encrypt_aes_v2(&new.key, key)?),
+        Placement::Shared { folder, kind, key } => {
+            (*kind, folder.into(), crate::crypto::encrypt_aes_v2(&new.key, key)?)
+        }
     };
     Ok(pb::RecordAdd {
         record_uid: (&new.uid).into(),
-        record_key: crypto::encrypt_aes_v2(&new.key, data_key)?,
+        record_key: crate::crypto::encrypt_aes_v2(&new.key, data_key)?,
         client_modified_time: now,
-        data: crypto::encrypt_aes_v2(&Vec::<u8>::try_from(&new.body)?, &new.key)?,
+        data: crate::crypto::encrypt_aes_v2(&Vec::<u8>::try_from(&new.body)?, &new.key)?,
         folder_type: folder_type as i32,
         folder_uid,
         folder_key,
@@ -552,7 +554,7 @@ fn record_update(
         record_uid: (&old.uid).into(),
         client_modified_time: now,
         revision: old.revision,
-        data: crypto::encrypt_aes_v2(&Vec::<u8>::try_from(&old.body)?, &old.key)?,
+        data: crate::crypto::encrypt_aes_v2(&Vec::<u8>::try_from(&old.body)?, &old.key)?,
         record_links_add: added,
         record_links_remove: removed,
         ..pb::RecordUpdate::default()
@@ -643,7 +645,7 @@ fn links(vault: &Vault, record_key: &AesKey, refs: &BTreeSet<String>) -> Result<
         .map(|target| {
             Ok(pb::RecordLink {
                 record_uid: Vec::from(&target.uid),
-                record_key: crypto::encrypt_aes_v2(&target.key, record_key)?,
+                record_key: crate::crypto::encrypt_aes_v2(&target.key, record_key)?,
             })
         })
         .collect()
@@ -842,7 +844,7 @@ fn unlink(session: &mut Session, filings: &[Filing], confirm: Confirm) -> Result
             .iter()
             .map(|f| serde_json::to_value(Doomed::from(f)))
             .collect::<Result<Vec<_>, _>>()?;
-        let rs = session.execute_v2(json!({ "command": "pre_delete", "objects": objects }))?;
+        let rs = session.execute_v2(serde_json::json!({ "command": "pre_delete", "objects": objects }))?;
         let pre = &rs["pre_delete_response"];
         if confirm == Confirm::Ask {
             for line in pre["would_delete"]["deletion_summary"]
@@ -857,7 +859,7 @@ fn unlink(session: &mut Session, filings: &[Filing], confirm: Confirm) -> Result
                 continue;
             }
         }
-        session.execute_v2(json!({ "command": "delete", "pre_delete_token": pre["pre_delete_token"] }))?;
+        session.execute_v2(serde_json::json!({ "command": "delete", "pre_delete_token": pre["pre_delete_token"] }))?;
     }
     Ok(())
 }
@@ -885,7 +887,7 @@ fn purge(ctx: &mut Ctx<'_>, filings: &[Filing], confirm: Confirm) -> Result<()> 
     for chunk in owned.chunks(REMOVE_CHUNK) {
         let rs = ctx
             .session
-            .execute_v2(json!({ "command": "record_update", "delete_records": chunk }))?;
+            .execute_v2(serde_json::json!({ "command": "record_update", "delete_records": chunk }))?;
         for status in rs["delete_records"].as_array().into_iter().flatten() {
             if status["status"] == "success" {
                 deleted += 1;
@@ -994,8 +996,8 @@ mod tests {
         };
         let data_key = key(3);
         let request = record_add(&data_key, &new, &Placement::Root, Vec::new(), 17).unwrap();
-        assert_eq!(crypto::decrypt_aes_v2(&request.record_key, &data_key).unwrap(), new.key.to_vec());
-        let plaintext = crypto::decrypt_aes_v2(&request.data, &new.key).unwrap();
+        assert_eq!(crate::crypto::decrypt_aes_v2(&request.record_key, &data_key).unwrap(), new.key.to_vec());
+        let plaintext = crate::crypto::decrypt_aes_v2(&request.data, &new.key).unwrap();
         assert!(plaintext.len() >= 384 && plaintext.len().is_multiple_of(16));
         assert_eq!(serde_json::from_slice::<Body>(&plaintext).unwrap().title, "test");
         assert_eq!(request.client_modified_time, 17);
@@ -1062,7 +1064,7 @@ mod tests {
         assert_eq!(request.revision, 8);
         assert_eq!(request.client_modified_time, 23);
         assert_eq!(request.record_links_remove, vec![vec![9; 16]]);
-        let plaintext = crypto::decrypt_aes_v2(&request.data, &old.key).unwrap();
+        let plaintext = crate::crypto::decrypt_aes_v2(&request.data, &old.key).unwrap();
         assert_eq!(serde_json::from_slice::<Body>(&plaintext).unwrap().title, "updated");
     }
 

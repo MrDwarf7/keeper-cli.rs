@@ -11,7 +11,6 @@ use aes_gcm::aead::{Aead, AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use hmac::{Hmac, Mac};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::{PublicKey, SecretKey};
 use rand::RngCore;
 use rand::rngs::OsRng;
 use rsa::pkcs1::DecodeRsaPrivateKey;
@@ -183,7 +182,7 @@ pub fn encrypt_aes_v2_in_place(frame: &mut [u8], key: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn ecdh_key(secret: &SecretKey, public: &PublicKey) -> [u8; 32] {
+fn ecdh_key(secret: &p256::SecretKey, public: &p256::PublicKey) -> [u8; 32] {
     let shared = p256::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine());
     let digest = Sha256::digest(shared.raw_secret_bytes());
     let mut key = [0u8; 32];
@@ -191,19 +190,20 @@ fn ecdh_key(secret: &SecretKey, public: &PublicKey) -> [u8; 32] {
     key
 }
 
-pub fn encrypt_ec(data: &[u8], public: &PublicKey) -> Result<Vec<u8>> {
-    let ephemeral = SecretKey::random(&mut OsRng);
+pub fn encrypt_ec(data: &[u8], public: &p256::PublicKey) -> Result<Vec<u8>> {
+    let ephemeral = p256::SecretKey::random(&mut OsRng);
     let mut out = ephemeral.public_key().to_encoded_point(false).as_bytes().to_vec();
     out.extend(encrypt_aes_v2(data, &ecdh_key(&ephemeral, public))?);
     Ok(out)
 }
 
-pub fn decrypt_ec(data: &[u8], private: &SecretKey) -> Result<Vec<u8>> {
+pub fn decrypt_ec(data: &[u8], private: &p256::SecretKey) -> Result<Vec<u8>> {
     if data.len() <= EC_PUBLIC_KEY_LEN {
         return Err(Error::Crypto("EC ciphertext too short".into()));
     }
     let (ephemeral, body) = data.split_at(EC_PUBLIC_KEY_LEN);
-    let public = PublicKey::from_sec1_bytes(ephemeral).map_err(|_| Error::Crypto("invalid EC public key".into()))?;
+    let public =
+        p256::PublicKey::from_sec1_bytes(ephemeral).map_err(|_| Error::Crypto("invalid EC public key".into()))?;
     decrypt_aes_v2(body, &ecdh_key(private, &public))
 }
 
@@ -296,13 +296,13 @@ mod tests {
 
     #[test]
     fn ec_roundtrip_through_serialized_keys() {
-        let private = SecretKey::random(&mut OsRng);
+        let private = p256::SecretKey::random(&mut OsRng);
         let public_bytes = private.public_key().to_encoded_point(false).as_bytes().to_vec();
-        let public = PublicKey::from_sec1_bytes(&public_bytes).unwrap();
+        let public = p256::PublicKey::from_sec1_bytes(&public_bytes).unwrap();
         let sealed = encrypt_ec(b"transmission key", &public).unwrap();
-        let reloaded = SecretKey::from_slice(&private.to_bytes()).unwrap();
+        let reloaded = p256::SecretKey::from_slice(&private.to_bytes()).unwrap();
         assert_eq!(decrypt_ec(&sealed, &reloaded).unwrap(), b"transmission key");
-        assert!(decrypt_ec(&sealed, &SecretKey::random(&mut OsRng)).is_err());
+        assert!(decrypt_ec(&sealed, &p256::SecretKey::random(&mut OsRng)).is_err());
     }
 
     #[test]

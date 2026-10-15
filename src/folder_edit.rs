@@ -3,7 +3,7 @@
 //! These are legacy JSON commands: new folder keys, names and data use CBC, and moves re-wrap
 //! keys only when an object crosses between private and shared-folder encryption realms.
 
-use std::fmt;
+use std::fmt::Display;
 use std::str::FromStr;
 
 use aes::cipher::block_padding::Pkcs7;
@@ -491,7 +491,7 @@ impl FromStr for Answer {
 fn ask<T>(question: &str) -> Result<T>
 where
     T: FromStr,
-    T::Err: fmt::Display,
+    T::Err: Display,
 {
     loop {
         match auth::prompt(question)?.parse() {
@@ -1015,8 +1015,8 @@ impl Realm<'_> {
 
 struct Trail<'a>(&'a Vault, &'a Location);
 
-impl fmt::Display for Trail<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Trail<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Location::Folder(_) = self.1 {
             let path = self.0.path_of(self.1);
             write!(f, "{}/", path.trim_start_matches('/'))?;

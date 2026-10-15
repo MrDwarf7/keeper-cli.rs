@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use clap::ValueEnum;
-use data_encoding::{BASE32, BASE64};
+use data_encoding::BASE64;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
@@ -706,7 +706,7 @@ fn generated(ty: &str, rest: &str, found: &mut Findings) -> Option<Assign> {
             }
         }
         "oneTimeCode" | "otp" => {
-            let secret = BASE32.encode(&crypto::random_bytes(20));
+            let secret = data_encoding::BASE32.encode(&crypto::random_bytes(20));
             Some(Assign::Set(Value::String(format!("otpauth://totp/Commander?secret={secret}&issuer=Keeper"))))
         }
         "keyPair" | "privateKey" => {

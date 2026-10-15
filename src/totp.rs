@@ -1,6 +1,5 @@
 //! RFC 6238 codes from `otpauth://totp/...` URLs stored in records.
 
-use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use hmac::{Hmac, Mac};
@@ -36,8 +35,8 @@ pub struct Code {
     pub remaining: u64,
 }
 
-impl Display for Code {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl std::fmt::Display for Code {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.value)
     }
 }

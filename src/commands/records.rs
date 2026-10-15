@@ -1,5 +1,4 @@
 use clap::Args;
-use serde_json::json;
 
 use super::{App, Clipped, Detail, DetailLine, Run, Table};
 use crate::cli::{DetailFormat, Format};
@@ -90,10 +89,10 @@ impl Run for Search {
                 }
             }
             Format::Json => {
-                let body = json!({
-                    "records": records.iter().map(|record| json!({"record_uid": record.uid.to_string(), "type": record.record_type(), "title": record.title(), "description": record.description()})).collect::<Vec<_>>(),
-                    "shared_folders": view.vault.shared_folders.values().filter(|folder| matches_terms(&format!("{} {}", folder.uid, folder.name), &terms)).map(|folder| json!({"shared_folder_uid": folder.uid.to_string(), "name": folder.name})).collect::<Vec<_>>(),
-                    "teams": view.vault.teams.values().filter(|team| matches_terms(&format!("{} {}", team.uid, team.name), &terms)).map(|team| json!({"team_uid": team.uid.to_string(), "name": team.name})).collect::<Vec<_>>(),
+                let body = serde_json::json!({
+                    "records": records.iter().map(|record| serde_json::json!({"record_uid": record.uid.to_string(), "type": record.record_type(), "title": record.title(), "description": record.description()})).collect::<Vec<_>>(),
+                    "shared_folders": view.vault.shared_folders.values().filter(|folder| matches_terms(&format!("{} {}", folder.uid, folder.name), &terms)).map(|folder| serde_json::json!({"shared_folder_uid": folder.uid.to_string(), "name": folder.name})).collect::<Vec<_>>(),
+                    "teams": view.vault.teams.values().filter(|team| matches_terms(&format!("{} {}", team.uid, team.name), &terms)).map(|team| serde_json::json!({"team_uid": team.uid.to_string(), "name": team.name})).collect::<Vec<_>>(),
                 });
                 println!("{}", serde_json::to_string_pretty(&body)?);
             }
@@ -205,17 +204,19 @@ impl From<&Object<'_>> for serde_json::Value {
     fn from(object: &Object<'_>) -> Self {
         match object {
             Object::Record(record) => {
-                json!({"uid": record.uid.to_string(), "type": record.record_type(), "name": record.title()})
+                serde_json::json!({"uid": record.uid.to_string(), "type": record.record_type(), "name": record.title()})
             }
-            Object::Folder(folder) => json!({"uid": folder.uid.to_string(), "type": "folder", "name": folder.name}),
+            Object::Folder(folder) => {
+                serde_json::json!({"uid": folder.uid.to_string(), "type": "folder", "name": folder.name})
+            }
             Object::SharedFolder(folder) => {
-                json!({"uid": folder.uid.to_string(), "type": "shared_folder", "name": folder.name,
+                serde_json::json!({"uid": folder.uid.to_string(), "type": "shared_folder", "name": folder.name,
                 "users": folder.users, "teams": folder.teams, "record_count": folder.record_uids.len(),
                 "default_can_edit": folder.default_can_edit, "default_can_share": folder.default_can_share,
                 "default_manage_records": folder.default_manage_records, "default_manage_users": folder.default_manage_users})
             }
             Object::Team(team) => {
-                json!({"uid": team.uid.to_string(), "type": "team", "name": team.name,
+                serde_json::json!({"uid": team.uid.to_string(), "type": "team", "name": team.name,
                 "restrict_edit": team.restrict_edit, "restrict_share": team.restrict_share, "restrict_view": team.restrict_view})
             }
         }
@@ -342,9 +343,9 @@ fn show_record(
 ) -> crate::Result<()> {
     match format {
         DetailFormat::Json => {
-            let body = json!({
+            let body = serde_json::json!({
                 "record_uid": record.uid.to_string(), "type": record.record_type(), "title": record.title(),
-                "fields": record.display_fields().iter().map(|field| json!({"label": field.label, "value": field.shown(secrets)})).collect::<Vec<_>>(),
+                "fields": record.display_fields().iter().map(|field| serde_json::json!({"label": field.label, "value": field.shown(secrets)})).collect::<Vec<_>>(),
                 "notes": record.notes(), "shared": record.shared, "revision": record.revision,
                 "client_modified_time": record.client_modified_time,
                 "udata": record.udata,

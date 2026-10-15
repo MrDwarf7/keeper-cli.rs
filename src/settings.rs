@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 use crate::prelude::*;
 
@@ -22,7 +21,7 @@ pub struct Settings {
     #[serde(skip)]
     pub path:             PathBuf,
     #[serde(skip)]
-    other:                Map<String, Value>,
+    other:                serde_json::Map<String, serde_json::Value>,
     #[serde(skip)]
     pub(crate) file_user: Option<String>,
     #[serde(default)]
@@ -47,9 +46,9 @@ impl Settings {
             Err(error) => return Err(error.into()),
         };
         let file_values = if text.trim().is_empty() {
-            Map::new()
+            serde_json::Map::new()
         } else {
-            serde_json::from_str::<Map<String, Value>>(&text)?
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text)?
         };
 
         let mut builder = config::Config::builder();
@@ -59,15 +58,18 @@ impl Settings {
         let merged = builder
             .add_source(config::Environment::with_prefix("KEEPER").ignore_empty(true))
             .build()?;
-        let values: Map<String, Value> = merged.try_deserialize()?;
+        let values: serde_json::Map<String, serde_json::Value> = merged.try_deserialize()?;
         validate_file_storage(&values)?;
-        let mut settings: Self = serde_json::from_value(Value::Object(values))?;
+        let mut settings: Self = serde_json::from_value(serde_json::Value::Object(values))?;
         settings.user = settings.user.as_deref().and_then(nonempty);
         settings.server = settings.server.as_deref().and_then(nonempty);
         settings.device_token = settings.device_token.as_deref().and_then(nonempty);
         settings.private_key = settings.private_key.as_deref().and_then(nonempty);
         settings.clone_code = settings.clone_code.as_deref().and_then(nonempty);
-        settings.file_user = file_values.get("user").and_then(Value::as_str).and_then(nonempty);
+        settings.file_user = file_values
+            .get("user")
+            .and_then(serde_json::Value::as_str)
+            .and_then(nonempty);
         settings.other = file_values;
         settings.path = path;
         Ok(settings)
@@ -77,7 +79,7 @@ impl Settings {
     pub fn save(&self) -> Result<()> {
         reject_symlink(&self.path)?;
         let mut out = self.other.clone();
-        if let Value::Object(known) = serde_json::to_value(self)? {
+        if let serde_json::Value::Object(known) = serde_json::to_value(self)? {
             for (key, value) in known {
                 if value.is_null() {
                     out.remove(&key);
@@ -100,10 +102,10 @@ fn nonempty(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-fn validate_file_storage(values: &Map<String, Value>) -> Result<()> {
+fn validate_file_storage(values: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
     match values.get("config_storage") {
-        None | Some(Value::Null) => Ok(()),
-        Some(Value::String(storage)) if storage.eq_ignore_ascii_case("file") => Ok(()),
+        None | Some(serde_json::Value::Null) => Ok(()),
+        Some(serde_json::Value::String(storage)) if storage.eq_ignore_ascii_case("file") => Ok(()),
         _ => {
             Err(Error::Generic(
                 "config_storage must be 'file'; refusing to write device credentials to a protected backend config"
@@ -185,7 +187,7 @@ mod tests {
         settings.device_token = Some("tok".into());
         settings.save().unwrap();
 
-        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["proxy"], "http://p:1");
         assert_eq!(saved["debug"], true);
         assert_eq!(saved["device_token"], "tok");

@@ -2,9 +2,8 @@
 //!
 //! Clipboard tools receive the text on stdin, so secrets do not appear in process arguments.
 
-use std::fmt;
-use std::io::{ErrorKind, Write};
-use std::process::{Command as Process, Stdio};
+use std::io::Write;
+use std::process::Stdio;
 
 use clap::{Args, ValueEnum};
 use serde_json::Value;
@@ -86,8 +85,8 @@ impl<'a> From<&'a CopyArgs> for Item<'a> {
     }
 }
 
-impl fmt::Display for Item<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Item<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Uid => f.write_str("Record UID"),
             Self::Login => f.write_str("Login"),
@@ -314,7 +313,7 @@ const TOOLS: &[Tool] = &[
 
 fn send_to_clipboard(text: &str) -> Result<()> {
     for tool in TOOLS {
-        let spawned = Process::new(tool.program)
+        let spawned = std::process::Command::new(tool.program)
             .args(tool.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -322,7 +321,7 @@ fn send_to_clipboard(text: &str) -> Result<()> {
             .spawn();
         let mut child = match spawned {
             Ok(child) => child,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
         };
         if let Some(mut stdin) = child.stdin.take() {

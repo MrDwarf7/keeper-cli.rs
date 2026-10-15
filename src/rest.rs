@@ -6,13 +6,10 @@
 //! accepts the classic EC exchange, which is all this client implements.
 
 use std::str::FromStr;
-use std::time::Duration;
 
-use p256::PublicKey;
 use prost::Message;
 use rand::rngs::OsRng;
 use rsa::pkcs1::DecodeRsaPublicKey;
-use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 
 use crate::crypto;
 use crate::error::ApiFailure;
@@ -141,8 +138,8 @@ impl RestContext {
             transmission_key: crypto::random_bytes(32),
             server_key_id:    DEFAULT_SERVER_KEY_ID,
             http:             reqwest::blocking::Client::builder()
-                .connect_timeout(Duration::from_secs(15))
-                .timeout(Duration::from_secs(300))
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .timeout(std::time::Duration::from_secs(300))
                 .build()?,
         })
     }
@@ -150,14 +147,14 @@ impl RestContext {
     fn seal_transmission_key(&self) -> Result<Vec<u8>> {
         match self.server_key_id {
             id @ 1..=6 => {
-                let public_key = RsaPublicKey::from_pkcs1_der(&b64_decode(RSA_SERVER_KEYS[id as usize - 1])?)
+                let public_key = rsa::RsaPublicKey::from_pkcs1_der(&b64_decode(RSA_SERVER_KEYS[id as usize - 1])?)
                     .map_err(|_| Error::Crypto("invalid RSA public key".into()))?;
                 public_key
-                    .encrypt(&mut OsRng, Pkcs1v15Encrypt, &self.transmission_key)
+                    .encrypt(&mut OsRng, rsa::Pkcs1v15Encrypt, &self.transmission_key)
                     .map_err(|_| Error::Crypto("RSA encryption failed".into()))
             }
             id @ 7..=18 => {
-                let public_key = PublicKey::from_sec1_bytes(&b64_decode(EC_SERVER_KEYS[id as usize - 7])?)
+                let public_key = p256::PublicKey::from_sec1_bytes(&b64_decode(EC_SERVER_KEYS[id as usize - 7])?)
                     .map_err(|_| Error::Crypto("invalid EC public key".into()))?;
                 crypto::encrypt_ec(&self.transmission_key, &public_key)
             }
@@ -237,7 +234,7 @@ impl RestContext {
                 }
                 let wait = throttle_delay(&failure.message, throttle_retries);
                 eprintln!("Throttled (attempt {throttle_retries}/{MAX_THROTTLE_RETRIES}), retrying in {wait} seconds");
-                std::thread::sleep(Duration::from_secs(wait));
+                std::thread::sleep(std::time::Duration::from_secs(wait));
                 continue;
             }
             return Err(failure.into());
@@ -286,10 +283,10 @@ mod tests {
     #[test]
     fn every_bundled_server_key_parses() {
         for key in RSA_SERVER_KEYS {
-            RsaPublicKey::from_pkcs1_der(&b64_decode(key).unwrap()).unwrap();
+            rsa::RsaPublicKey::from_pkcs1_der(&b64_decode(key).unwrap()).unwrap();
         }
         for key in EC_SERVER_KEYS {
-            PublicKey::from_sec1_bytes(&b64_decode(key).unwrap()).unwrap();
+            p256::PublicKey::from_sec1_bytes(&b64_decode(key).unwrap()).unwrap();
         }
     }
 

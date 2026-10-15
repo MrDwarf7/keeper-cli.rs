@@ -1,5 +1,3 @@
-use std::fmt;
-
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -16,8 +14,8 @@ pub struct ApiFailure {
     pub region_host:     Option<String>,
 }
 
-impl fmt::Display for ApiFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for ApiFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.error, self.message)
     }
 }
