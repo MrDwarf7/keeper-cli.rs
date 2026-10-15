@@ -19,14 +19,14 @@ pub enum RecordKind {
     PamConfiguration,
 }
 
-impl RecordKind {
-    pub fn version(&self) -> i32 {
-        match self {
-            Self::Legacy { .. } => 2,
-            Self::Typed => 3,
-            Self::File { .. } => 4,
-            Self::Application => 5,
-            Self::PamConfiguration => 6,
+impl From<&RecordKind> for i32 {
+    fn from(kind: &RecordKind) -> Self {
+        match kind {
+            RecordKind::Legacy { .. } => 2,
+            RecordKind::Typed => 3,
+            RecordKind::File { .. } => 4,
+            RecordKind::Application => 5,
+            RecordKind::PamConfiguration => 6,
         }
     }
 }

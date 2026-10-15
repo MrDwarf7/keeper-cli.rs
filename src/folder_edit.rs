@@ -732,7 +732,7 @@ fn selected(vault: &Vault, cwd: &Location, src: &str, dst: &Location, matching: 
                         .records_in(&parent)
                         .filter(|record| {
                             record.uid.as_ref() == name.as_str()
-                                || (matches!(record.kind.version(), 2 | 3) && glob.is_match(record.title()))
+                                || (matches!(i32::from(&record.kind), 2 | 3) && glob.is_match(record.title()))
                         })
                         .map(|record| {
                             Source::Record {
@@ -913,7 +913,7 @@ impl TryFrom<(&Record, &[u8])> for TransitionKey {
     type Error = Error;
 
     fn try_from((record, wrapper): (&Record, &[u8])) -> Result<Self> {
-        let key = if record.kind.version() >= 3 {
+        let key = if i32::from(&record.kind) >= 3 {
             Sealed::gcm(&record.key, wrapper)
         } else {
             Sealed::cbc(&record.key, wrapper)
