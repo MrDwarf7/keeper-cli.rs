@@ -280,10 +280,9 @@ impl App {
     }
 
     fn whoami(&mut self, verbose: bool) -> Result<()> {
-        let Some(session) = &self.session else {
-            println!("Not logged in");
-            return Ok(());
-        };
+        // Like every Commander command, whoami authenticates first; a one-shot run has no session yet.
+        self.vault()?;
+        let session = self.session.as_ref().ok_or(Error::NotLoggedIn)?;
         let host = session.rest.host();
         let mut rows = vec![
             ("User", session.user.clone()),
