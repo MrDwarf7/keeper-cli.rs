@@ -517,12 +517,14 @@ fn download(http: &reqwest::blocking::Client, ticket: &Ticket, key: &[u8], path:
         .create_new(true)
         .open(path)
         .map_err(|error| Error::Generic(format!("{}: {error}", path.display())))?;
-    if let Err(error) = file.write_all(&plain) {
-        drop(file);
-        let _ = std::fs::remove_file(path);
-        return Err(Error::Generic(format!("{}: {error}", path.display())));
+    if let Err(error) = file.write_all(plain) {
+        return Err(Error::Generic(format!(
+            "{}: {error} (partial file may remain)",
+            path.display()
+        )));
     }
     Ok(())
+}
 
 /// Upload local files to a typed record.
 #[derive(Args, Debug)]
