@@ -223,12 +223,11 @@ struct Ticket {
     cipher: Cipher,
 }
 
-fn connected(app: &mut App) -> Result<(&mut Session, &Vault)> {
+fn connected(app: &mut App) -> Result<(&mut Session, &Vault, Location)> {
     app.ensure_synced()?;
-    match (app.session.as_mut(), app.vault.as_ref()) {
-        (Some(session), Some(vault)) => Ok((session, vault)),
-        _ => Err(Error::NotLoggedIn),
-    }
+    let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+    let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+    Ok((&mut account.session, vault, account.cwd.clone()))
 }
 
 /// Large attachments can legitimately take minutes; only the connection is time-limited.
@@ -241,7 +240,6 @@ fn http_client() -> Result<reqwest::blocking::Client> {
 
 impl Run for DownloadAttachment {
     fn run(self, app: &mut App) -> Result<()> {
-        let cwd = app.cwd.clone();
         let out_dir = match self.out_dir {
             Some(UserPath(dir)) => dir,
             None => std::env::current_dir()?,
@@ -257,7 +255,7 @@ impl Run for DownloadAttachment {
             Naming::Stored
         };
         let depth = if self.recursive { Depth::Subtree } else { Depth::Folder };
-        let (session, vault) = connected(app)?;
+        let (session, vault, cwd) = connected(app)?;
         let records = select_records(vault, &cwd, &self.records, depth);
         if records.is_empty() {
             return Err(Error::Generic(format!("Record(s) \"{}\" not found", self.records.join(", "))));
@@ -612,9 +610,8 @@ impl NewFile {
 
 impl Run for UploadAttachment {
     fn run(self, app: &mut App) -> Result<()> {
-        let cwd = app.cwd.clone();
         let files = self.files.iter().map(LocalFile::try_from).collect::<Result<Vec<_>>>()?;
-        let (session, vault) = connected(app)?;
+        let (session, vault, cwd) = connected(app)?;
         let record = vault
             .resolve_record(&cwd, &self.record)
             .ok_or_else(|| Error::Generic(format!("Record UID not found for record \"{}\"", self.record)))?;
@@ -659,7 +656,7 @@ impl Run for UploadAttachment {
             return Err(Error::api(name, status.message.clone()));
         }
         eprintln!("Uploaded {} file(s) to \"{}\"", files.len(), record.title());
-        app.vault = None;
+        app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
         Ok(())
     }
 }

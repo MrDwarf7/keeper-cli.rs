@@ -210,7 +210,7 @@ impl Run for Mkdir {
             let path = format!("{}{name}", Trail(vault, &parent));
             println!("{}", serde_json::json!({ "folder_uid": uid.to_string(), "name": name, "path": path }));
         };
-        app.vault = None;
+        app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
         Ok(())
     }
 }
@@ -291,7 +291,7 @@ impl Run for Rmdir {
             }
             session.execute_v2(serde_json::to_value(Request::Delete { pre_delete_token })?)?;
         }
-        app.vault = None;
+        app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
         Ok(())
     }
 }
@@ -337,7 +337,7 @@ impl Run for Rndir {
                 eprintln!("Folder \"{}\" has been renamed to \"{new}\"", folder.name);
             }
         }
-        app.vault = None;
+        app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
         Ok(())
     }
 }
@@ -376,7 +376,7 @@ impl Run for Mv {
             })?;
             session.execute_v2(serde_json::to_value(request)?)?;
         }
-        app.vault = None;
+        app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
         Ok(())
     }
 }
@@ -384,10 +384,9 @@ impl Run for Mv {
 /// Logged-in session, synced vault and current folder; writes invalidate the cached vault.
 fn connect(app: &mut App) -> Result<(&mut Session, &Vault, &Location)> {
     app.ensure_synced()?;
-    match (app.session.as_mut(), app.vault.as_ref()) {
-        (Some(session), Some(vault)) => Ok((session, vault, &app.cwd)),
-        _ => Err(Error::NotLoggedIn),
-    }
+    let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+    let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+    Ok((&mut account.session, vault, &account.cwd))
 }
 
 #[derive(Clone, Copy, Debug)]
