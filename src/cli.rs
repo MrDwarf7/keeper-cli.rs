@@ -34,7 +34,12 @@ pub struct Cli {
 }
 
 #[derive(Parser, Debug)]
-#[command(no_binary_name = true, disable_version_flag = true, name = "", about = "Shell commands")]
+#[command(
+    no_binary_name = true,
+    disable_version_flag = true,
+    name = "",
+    about = "Shell commands"
+)]
 pub struct ShellLine {
     #[command(subcommand)]
     pub command: Command,
@@ -158,11 +163,32 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format:    Format,
     },
+    /// Show this device's login settings, or change them
+    #[command(name = "this-device")]
+    ThisDevice {
+        #[command(subcommand)]
+        action: Option<DeviceAction>,
+    },
     /// Start the interactive shell
     Shell,
     /// Leave the shell
     #[command(visible_alias = "quit", hide = true)]
     Exit,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DeviceAction {
+    /// Store an encrypted copy of the data key for this device
+    Register,
+    /// Turn "Stay Logged In" on or off; "on" lets commands run without the master password
+    #[command(name = "persistent-login", visible_alias = "pl")]
+    PersistentLogin { state: Toggle },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toggle {
+    On,
+    Off,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]

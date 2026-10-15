@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use crate::auth::{self, Session};
-use crate::cli::{Command, DetailFormat, Format};
+use crate::cli::{Command, DetailFormat, DeviceAction, Format, Toggle};
 use crate::config::Config;
 use crate::generator::{self, Rules};
 use crate::prelude::*;
@@ -235,8 +235,52 @@ impl App {
                 }
                 Ok(())
             }
+            Command::ThisDevice { action } => self.this_device(action),
             Command::Shell | Command::Exit => Ok(()),
         }
+    }
+
+    fn this_device(&mut self, action: Option<DeviceAction>) -> Result<()> {
+        if self.session.is_none() {
+            self.login(None)?;
+        }
+        let device_token = b64_decode(self.config.get("device_token").ok_or(Error::NotLoggedIn)?)?;
+        let device_key = crate::crypto::load_ec_private_key(&b64_decode(
+            self.config.get("private_key").ok_or(Error::NotLoggedIn)?,
+        )?)?;
+        let session = self.session.as_mut().ok_or(Error::NotLoggedIn)?;
+        match action {
+            None => {
+                session.refresh_summary()?;
+                let summary = &session.summary;
+                let device = summary
+                    .devices
+                    .iter()
+                    .find(|d| d.encrypted_device_token == device_token);
+                let persistent = summary.settings.as_ref().is_some_and(|s| s.persistent_login)
+                    && !persistent_login_restricted(session);
+                detail_line("Device Name", device.map_or("Unknown", |d| d.device_name.as_str()));
+                detail_line("Data Key Present", &device.is_some_and(|d| d.encrypted_data_key_present).to_string());
+                detail_line("Persistent Login", if persistent { "ON" } else { "OFF" });
+                detail_line("Config File", &self.config.path().display().to_string());
+            }
+            Some(DeviceAction::Register) => {
+                if session.register_device_data_key(device_token, &device_key)? {
+                    eprintln!("Successfully registered device");
+                } else {
+                    eprintln!("Device already registered");
+                }
+            }
+            Some(DeviceAction::PersistentLogin { state }) => {
+                if persistent_login_restricted(session) {
+                    return Err(Error::Generic("\"Stay Logged In\" is restricted by your Keeper administrator".into()));
+                }
+                session.set_user_setting("persistent_login", if state == Toggle::On { "1" } else { "0" })?;
+                eprintln!("Persistent login {}", if state == Toggle::On { "ENABLED" } else { "DISABLED" });
+                session.register_device_data_key(device_token, &device_key)?;
+            }
+        }
+        Ok(())
     }
 
     fn logout(&mut self) -> Result<()> {
@@ -289,6 +333,15 @@ impl App {
         }
         Ok(())
     }
+}
+
+fn persistent_login_restricted(session: &Session) -> bool {
+    session
+        .summary
+        .enforcements
+        .as_ref()
+        .and_then(|e| e.booleans.iter().find(|b| b.key == "restrict_persistent_login"))
+        .is_some_and(|b| b.value)
 }
 
 fn data_center(host: &str) -> &'static str {

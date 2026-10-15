@@ -26,6 +26,7 @@ use crate::proto::authentication::{
     LoginState,
     LoginType,
     PasswordMethod,
+    RegisterDeviceDataKeyRequest,
     RegisterDeviceInRegionRequest,
     SessionTokenType,
     StartLoginRequest,
@@ -37,6 +38,7 @@ use crate::proto::authentication::{
     TwoFactorValidateRequest,
     TwoFactorValidateResponse,
     TwoFactorValueType,
+    UserSettingRequest,
     ValidateAuthHashRequest,
     ValidateDeviceVerificationCodeRequest,
 };
@@ -72,6 +74,40 @@ impl Session {
 
     pub fn logout(&mut self) -> Result<()> {
         self.call("vault/logout_v3", None).map(drop)
+    }
+
+    pub fn refresh_summary(&mut self) -> Result<&AccountSummaryElements> {
+        self.summary = self.call_typed(
+            "login/account_summary",
+            &AccountSummaryRequest {
+                summary_version: 3,
+                ..Default::default()
+            },
+        )?;
+        Ok(&self.summary)
+    }
+
+    /// Lets this device unwrap the data key itself (`ByDevicePublicKey`), which is what makes
+    /// clone-code ("Stay Logged In") logins skip the master password. Returns false if the
+    /// device already had one.
+    pub fn register_device_data_key(&mut self, device_token: Vec<u8>, device_key: &SecretKey) -> Result<bool> {
+        let rq = RegisterDeviceDataKeyRequest {
+            encrypted_device_token:    device_token,
+            encrypted_device_data_key: crypto::encrypt_ec(&self.data_key, &device_key.public_key())?,
+        };
+        match self.call("authentication/register_encrypted_data_key_for_device", Some(&rq)) {
+            Ok(_) => Ok(true),
+            Err(Error::Api { code, .. }) if code == "device_data_key_exists" => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_user_setting(&mut self, setting: &str, value: &str) -> Result<()> {
+        let rq = UserSettingRequest {
+            setting: setting.into(),
+            value:   value.into(),
+        };
+        self.call("setting/set_user_setting", Some(&rq)).map(drop)
     }
 }
 
@@ -704,13 +740,8 @@ impl LoginFlow<'_> {
             ecc_key: None,
             summary: AccountSummaryElements::default(),
         };
-        let summary: AccountSummaryElements = session.call_typed(
-            "login/account_summary",
-            &AccountSummaryRequest {
-                summary_version: 3,
-                ..Default::default()
-            },
-        )?;
+        session.refresh_summary()?;
+        let summary = std::mem::take(&mut session.summary);
         if let Some(keys) = &summary.keys_info {
             if !keys.encrypted_private_key.is_empty() {
                 let der = crypto::decrypt_aes_v1(&keys.encrypted_private_key, &session.data_key)?;
