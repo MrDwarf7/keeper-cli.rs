@@ -229,11 +229,9 @@ impl LoginFlow<'_> {
                 }
                 LoginState::Requires2fa => {
                     let token = self.two_factor(&resp)?;
-                    self.resume_login(token, self.login_type(), LoginMethod::ExistingAccount)?
+                    self.resume_login(token, self.login_type())?
                 }
-                LoginState::RequiresUsername => {
-                    self.resume_login(resp.encrypted_login_token, LoginType::Normal, LoginMethod::ExistingAccount)?
-                }
+                LoginState::RequiresUsername => self.resume_login(resp.encrypted_login_token, LoginType::Normal)?,
                 LoginState::RedirectCloudSso | LoginState::RedirectOnsiteSso => {
                     eprintln!("SSO login is not supported by this client.");
                     eprintln!("Attempting to authenticate with a master password.");
@@ -352,19 +350,14 @@ impl LoginFlow<'_> {
         self.send_start_login(&rq, login_type)
     }
 
-    fn resume_login(
-        &mut self,
-        login_token: Vec<u8>,
-        login_type: LoginType,
-        method: LoginMethod,
-    ) -> Result<LoginResponse> {
+    /// Commander leaves `login_method` unset when resuming without a clone code; so do we.
+    fn resume_login(&mut self, login_token: Vec<u8>, login_type: LoginType) -> Result<LoginResponse> {
         let rq = StartLoginRequest {
             client_version: CLIENT_VERSION.into(),
             username: self.user.to_lowercase(),
             encrypted_device_token: self.device_token()?,
             encrypted_login_token: login_token,
             login_type: login_type as i32,
-            login_method: method as i32,
             ..Default::default()
         };
         self.send_start_login(&rq, login_type)
