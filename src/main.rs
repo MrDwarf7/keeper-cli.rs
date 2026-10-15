@@ -1,14 +1,16 @@
-// #[cfg(feature = "macros")]
-// mod macros;
-
+mod auth;
+mod config;
+mod crypto;
 mod error;
 mod prelude;
+mod proto;
+mod rest;
 
 pub use crate::error::{Error, Result};
 
-#[allow(clippy::unnecessary_wraps)]
 fn main() -> Result<()> {
-    println!("Hello, world!");
-
+    let mut config = config::Config::load(config::Config::resolve_path(None))?;
+    let session = auth::login(&mut config, None, None)?;
+    println!("{}", session.user);
     Ok(())
 }
