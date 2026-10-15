@@ -3,7 +3,7 @@
 # cargo-features = ["profile-rustflags", "trim-paths"] # required for both trimming paths and setting rustflags
 # The aboe also needs the profile.dev to be uncommented to use the cranelift backend
 [package]
-name = "keeper-cli"
+name        = "keeper-cli"
 version     = "0.1.0"
 authors     = [ "MrDwarf7", "Blake B. <github.com/MrDwarf7>" ]
 edition     = "2024"
@@ -34,26 +34,26 @@ winresource = "0.1.19"
 
 
 [dependencies]
-aes = "0.8"
-aes-gcm = "0.10"
-cbc = "0.1"
-clap = { version = "4.6.7", features = ["derive", "env"] }
-config = { version = "0.15.27", default-features = false, features = ["json"] }
+aes           = "0.8"
+aes-gcm       = "0.10"
+cbc           = "0.1"
+clap          = { version = "4.6.7", features = [ "derive", "env" ] }
+config        = { version = "0.15.27", default-features = false, features = [ "json" ] }
 data-encoding = "2.11.1"
-dirs = "7.0.0"
-hmac = "0.12"
-p256 = { version = "0.13", features = ["ecdh"] }
-pbkdf2 = "0.12"
-prost = "0.14.4"
-rand = "0.8"
-reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls"] }
-rpassword = "7.5.4"
-rsa = "0.9.10"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
-sha1 = "0.10"
-sha2 = "0.10"
-shlex = "2.0.1"
+dirs          = "7.0.0"
+hmac          = "0.12"
+p256          = { version = "0.13", features = [ "ecdh" ] }
+pbkdf2        = "0.12"
+prost         = "0.14.4"
+rand          = "0.8"
+reqwest       = { version = "0.13.5", default-features = false, features = [ "blocking", "rustls" ] }
+rpassword     = "7.5.4"
+rsa           = "0.9.10"
+serde         = { version = "1.0.229", features = [ "derive" ] }
+serde_json    = "1.0.154"
+sha1          = "0.10"
+sha2          = "0.10"
+shlex         = "2.0.1"
 # eyre = "*"
 # dotenvy = "*"
 # futures = "*"
@@ -155,6 +155,6 @@ unsafe_code = { level = "forbid", priority = 0 }
 enum_glob_use = { level = "warn", priority = 2 }
 
 [build-dependencies]
-prost = "0.14.4"
+prost       = "0.14.4"
 prost-build = "0.14.4"
 prost-types = "0.14.4"
