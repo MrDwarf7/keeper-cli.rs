@@ -1,3 +1,4 @@
+mod attachment;
 mod auth;
 mod cli;
 mod commands;

@@ -168,6 +168,9 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format:    Format,
     },
+    /// Download record attachments
+    #[command(name = "download-attachment", visible_alias = "da")]
+    DownloadAttachment(crate::attachment::DownloadAttachment),
     /// Show this device's login settings, or change them
     #[command(name = "this-device")]
     ThisDevice {
