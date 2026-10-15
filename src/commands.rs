@@ -4,9 +4,9 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, Session};
 use crate::cli::{Command, DetailFormat, DeviceAction, Format, Toggle};
-use crate::config::Config;
 use crate::generator::{self, Rules};
 use crate::prelude::*;
+use crate::settings::Settings;
 use crate::totp::Totp;
 use crate::vault::{self, FolderKind, Record, Vault};
 
@@ -14,7 +14,7 @@ const MASK: &str = "********";
 const DESCRIPTION_WIDTH: usize = 40;
 
 pub struct App {
-    pub config: Config,
+    pub config: Settings,
     user:       Option<String>,
     password:   Option<String>,
     session:    Option<Session>,
@@ -24,7 +24,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, user: Option<String>, password: Option<String>) -> Self {
+    pub fn new(config: Settings, user: Option<String>, password: Option<String>) -> Self {
         Self {
             config,
             user,
@@ -226,9 +226,9 @@ impl App {
         if self.session.is_none() {
             self.login(None)?;
         }
-        let device_token = b64_decode(self.config.get("device_token").ok_or(Error::NotLoggedIn)?)?;
+        let device_token = b64_decode(self.config.device_token.as_deref().ok_or(Error::NotLoggedIn)?)?;
         let device_key = crate::crypto::load_ec_private_key(&b64_decode(
-            self.config.get("private_key").ok_or(Error::NotLoggedIn)?,
+            self.config.private_key.as_deref().ok_or(Error::NotLoggedIn)?,
         )?)?;
         let session = self.session.as_mut().ok_or(Error::NotLoggedIn)?;
         match action {
@@ -273,7 +273,7 @@ impl App {
         }
         self.vault = None;
         self.cwd.clear();
-        self.config.set("clone_code", None);
+        self.config.clone_code = None;
         self.config.save()?;
         eprintln!("Logged out; persistent login on this device has been cleared.");
         Ok(())

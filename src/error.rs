@@ -30,6 +30,12 @@ pub enum Error {
 
     #[error("malformed server response: {0}")]
     Decode(#[from] prost::DecodeError),
+
+    #[error("unknown protocol enum value {}", .0.0)]
+    UnknownEnum(#[from] prost::UnknownEnumValue),
+
+    #[error("config: {0}")]
+    Config(#[from] config::ConfigError),
 }
 
 impl Error {

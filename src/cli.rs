@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 )]
 pub struct Cli {
     /// Config file
-    #[arg(long, global = true, env = "KEEPER_CONFIG_FILE", default_value_os_t = crate::config::default_path())]
+    #[arg(long, global = true, env = "KEEPER_CONFIG_FILE", default_value_os_t = crate::settings::default_path())]
     pub config: PathBuf,
 
     /// Account email

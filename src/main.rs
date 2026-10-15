@@ -1,13 +1,13 @@
 mod auth;
 mod cli;
 mod commands;
-mod config;
 mod crypto;
 mod error;
 mod generator;
 mod prelude;
 mod proto;
 mod rest;
+mod settings;
 mod totp;
 mod vault;
 
@@ -33,9 +33,9 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let mut config = config::Config::load(cli.config)?;
-    if let Some(server) = cli.server {
-        config.set("server", Some(server));
+    let mut config = settings::Settings::load(cli.config)?;
+    if cli.server.is_some() {
+        config.server = cli.server;
     }
     let mut app = App::new(config, cli.user, cli.password);
     match cli.command {

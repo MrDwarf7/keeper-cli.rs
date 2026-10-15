@@ -11,7 +11,6 @@ use p256::SecretKey;
 use prost::Message;
 use rsa::RsaPrivateKey;
 
-use crate::config::Config;
 use crate::crypto;
 use crate::prelude::*;
 use crate::proto::account_summary::{AccountSummaryElements, AccountSummaryRequest};
@@ -43,6 +42,7 @@ use crate::proto::authentication::{
     ValidateDeviceVerificationCodeRequest,
 };
 use crate::rest::{CLIENT_VERSION, Response, RestContext};
+use crate::settings::Settings;
 
 pub struct Session {
     pub rest:      RestContext,
@@ -196,7 +196,7 @@ fn device_name() -> String {
 }
 
 struct LoginFlow<'a> {
-    config:            &'a mut Config,
+    config:            &'a mut Settings,
     rest:              RestContext,
     user:              String,
     password:          Option<String>,
@@ -212,17 +212,17 @@ enum DeviceTokenProblem {
     Invalid,
 }
 
-pub fn login(config: &mut Config, user: Option<String>, password: Option<String>) -> Result<Session> {
-    let user = match user.or_else(|| config.get("user").map(str::to_owned)) {
+pub fn login(config: &mut Settings, user: Option<String>, password: Option<String>) -> Result<Session> {
+    let user = match user.or_else(|| config.user.clone()) {
         Some(u) => u,
         None => prompt("Email: ")?,
     };
     if user.is_empty() {
         return Err(Error::Cancelled);
     }
-    if config.get("user").is_some_and(|u| !u.eq_ignore_ascii_case(&user)) {
+    if config.user.as_ref().is_some_and(|u| !u.eq_ignore_ascii_case(&user)) {
         // A clone code resumes a specific account's session; it is meaningless for another user.
-        config.set("clone_code", None);
+        config.clone_code = None;
     }
     let flow = LoginFlow {
         rest: RestContext::new(config.server())?,
@@ -235,8 +235,8 @@ pub fn login(config: &mut Config, user: Option<String>, password: Option<String>
         alternate: false,
     };
     let session = flow.run()?;
-    config.set("user", Some(session.user.clone()));
-    config.set("server", Some(session.rest.host()));
+    config.user = Some(session.user.clone());
+    config.server = Some(session.rest.host());
     config.save()?;
     Ok(session)
 }
@@ -314,21 +314,22 @@ impl LoginFlow<'_> {
     }
 
     fn reset_device(&mut self) {
-        for key in ["device_token", "private_key", "clone_code"] {
-            self.config.set(key, None);
-        }
+        self.config.device_token = None;
+        self.config.private_key = None;
+        self.config.clone_code = None;
     }
 
     fn device_key(&self) -> Result<SecretKey> {
         let encoded = self
             .config
-            .get("private_key")
+            .private_key
+            .as_deref()
             .ok_or_else(|| Error::Generic("device private key missing from config".into()))?;
         crypto::load_ec_private_key(&b64_decode(encoded)?)
     }
 
     fn device_token(&mut self) -> Result<Vec<u8>> {
-        if let Some(token) = self.config.get("device_token") {
+        if let Some(token) = &self.config.device_token {
             return b64_decode(token);
         }
         let private = crypto::generate_ec_key();
@@ -340,9 +341,8 @@ impl LoginFlow<'_> {
         };
         let device =
             Device::decode(unauthenticated_ok(&mut self.rest, "authentication/register_device", &rq)?.as_slice())?;
-        self.config
-            .set("device_token", Some(b64_encode(&device.encrypted_device_token)));
-        self.config.set("private_key", Some(b64_encode(&private.to_bytes())));
+        self.config.device_token = Some(b64_encode(&device.encrypted_device_token));
+        self.config.private_key = Some(b64_encode(&private.to_bytes()));
         self.config.save()?;
         Ok(device.encrypted_device_token)
     }
@@ -367,7 +367,7 @@ impl LoginFlow<'_> {
 
     fn start_login(&mut self, login_type: LoginType, use_clone_code: bool) -> Result<LoginResponse> {
         let clone_code = if use_clone_code {
-            self.config.get("clone_code").map(b64_decode).transpose()?
+            self.config.clone_code.as_deref().map(b64_decode).transpose()?
         } else {
             None
         };
@@ -734,7 +734,7 @@ impl LoginFlow<'_> {
             }
             other => return Err(Error::Generic(format!("Data key type {other:?} is not supported"))),
         };
-        self.config.set("clone_code", Some(b64_encode(&resp.clone_code)));
+        self.config.clone_code = Some(b64_encode(&resp.clone_code));
 
         match SessionTokenType::try_from(resp.session_token_type).unwrap_or(SessionTokenType::Restrict) {
             SessionTokenType::NoRestriction => {}

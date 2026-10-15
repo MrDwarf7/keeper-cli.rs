@@ -126,24 +126,34 @@ impl Vault {
     }
 }
 
-struct Keys<'a> {
+/// Keys able to open other keys, as tagged by `records.RecordKeyType`: the account's (data key
+/// plus RSA/EC private keys) or a team's.
+struct KeyRing<'a> {
     data_key: &'a [u8],
     rsa:      Option<&'a RsaPrivateKey>,
     ecc:      Option<&'a SecretKey>,
 }
 
-impl Keys<'_> {
-    fn unwrap(&self, encrypted: &[u8], key_type: i32) -> Result<Vec<u8>> {
-        match RecordKeyType::try_from(key_type) {
-            Ok(RecordKeyType::EncryptedByDataKey) => crypto::decrypt_aes_v1(encrypted, self.data_key),
-            Ok(RecordKeyType::EncryptedByDataKeyGcm) => crypto::decrypt_aes_v2(encrypted, self.data_key),
-            Ok(RecordKeyType::EncryptedByPublicKey) => {
-                crypto::decrypt_rsa(encrypted, self.rsa.ok_or_else(|| Error::Crypto("account has no RSA key".into()))?)
+impl KeyRing<'_> {
+    fn decrypt(&self, ciphertext: &[u8], key_type: i32) -> Result<Vec<u8>> {
+        match RecordKeyType::try_from(key_type)? {
+            RecordKeyType::EncryptedByDataKey => crypto::decrypt_aes_v1(ciphertext, self.data_key),
+            RecordKeyType::EncryptedByDataKeyGcm => crypto::decrypt_aes_v2(ciphertext, self.data_key),
+            RecordKeyType::EncryptedByPublicKey => {
+                crypto::decrypt_rsa(
+                    ciphertext,
+                    self.rsa
+                        .ok_or_else(|| Error::Crypto("no RSA key to open this key".into()))?,
+                )
             }
-            Ok(RecordKeyType::EncryptedByPublicKeyEcc) => {
-                crypto::decrypt_ec(encrypted, self.ecc.ok_or_else(|| Error::Crypto("account has no EC key".into()))?)
+            RecordKeyType::EncryptedByPublicKeyEcc => {
+                crypto::decrypt_ec(
+                    ciphertext,
+                    self.ecc
+                        .ok_or_else(|| Error::Crypto("no EC key to open this key".into()))?,
+                )
             }
-            _ => Err(Error::Crypto(format!("unsupported key type {key_type}"))),
+            other => Err(Error::Crypto(format!("unsupported key type {other:?}"))),
         }
     }
 }
@@ -183,7 +193,7 @@ pub fn sync_down(session: &mut Session) -> Result<Vault> {
             break;
         }
     }
-    let keys = Keys {
+    let keys = KeyRing {
         data_key: &session.data_key,
         rsa:      session.rsa_key.as_ref(),
         ecc:      session.ecc_key.as_ref(),
@@ -191,14 +201,14 @@ pub fn sync_down(session: &mut Session) -> Result<Vault> {
     Ok(build(&pages, &keys))
 }
 
-fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
+fn build(pages: &[SyncDownResponse], keys: &KeyRing) -> Vault {
     let mut record_keys: HashMap<String, Vec<u8>> = HashMap::new();
     let mut team_sf_keys: HashMap<String, Vec<u8>> = HashMap::new();
     let mut vault = Vault::default();
 
     for team in pages.iter().flat_map(|p| &p.teams) {
         let team_uid = uid(&team.team_uid);
-        let Ok(team_key) = keys.unwrap(&team.team_key, team.team_key_type) else {
+        let Ok(team_key) = keys.decrypt(&team.team_key, team.team_key_type) else {
             continue;
         };
         let team_rsa = (!team.team_private_key.is_empty())
@@ -212,13 +222,13 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
                     .and_then(|d| crypto::load_ec_private_key(&d))
             })
             .and_then(Result::ok);
-        let team_keys = Keys {
+        let team_keys = KeyRing {
             data_key: &team_key,
             rsa:      team_rsa.as_ref(),
             ecc:      team_ecc.as_ref(),
         };
         for sfk in &team.shared_folder_keys {
-            if let Ok(key) = team_keys.unwrap(&sfk.shared_folder_key, sfk.key_type) {
+            if let Ok(key) = team_keys.decrypt(&sfk.shared_folder_key, sfk.key_type) {
                 team_sf_keys.insert(uid(&sfk.shared_folder_uid), key);
             }
         }
@@ -240,7 +250,7 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
         let key = if sf.shared_folder_key.is_empty() {
             team_sf_keys.get(&sf_uid).cloned()
         } else {
-            keys.unwrap(&sf.shared_folder_key, sf.key_type)
+            keys.decrypt(&sf.shared_folder_key, sf.key_type)
                 .ok()
                 .or_else(|| team_sf_keys.get(&sf_uid).cloned())
         };
@@ -304,7 +314,7 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
         if md.owner {
             owned.insert(uid(&md.record_uid));
         }
-        if let Ok(key) = keys.unwrap(&md.record_key, md.record_key_type)
+        if let Ok(key) = keys.decrypt(&md.record_key, md.record_key_type)
             && key.len() == 32
         {
             record_keys.insert(uid(&md.record_uid), key);
@@ -388,7 +398,7 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
 
     for uf in pages.iter().flat_map(|p| &p.user_folders) {
         let folder_uid = uid(&uf.folder_uid);
-        let folder_key = keys.unwrap(&uf.user_folder_key, uf.key_type).ok();
+        let folder_key = keys.decrypt(&uf.user_folder_key, uf.key_type).ok();
         let name = folder_key
             .as_ref()
             .and_then(|k| crypto::decrypt_aes_v1(&uf.data, k).ok())
@@ -817,7 +827,7 @@ mod tests {
     #[test]
     fn sync_page_decrypts_every_key_path_and_builds_tree() {
         let data_key = crypto::random_bytes(32);
-        let keys = Keys {
+        let keys = KeyRing {
             data_key: &data_key,
             rsa:      None,
             ecc:      None,
