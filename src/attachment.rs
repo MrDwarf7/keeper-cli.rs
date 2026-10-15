@@ -529,11 +529,47 @@ pub struct UploadAttachment {
     record: String,
 }
 
+struct UploadFile {
+    local: LocalFile,
+    uid:   Vec<u8>,
+    key:   AesKey,
+}
+
 struct LocalFile {
     path: PathBuf,
     name: String,
     size: usize,
     mime: MimeType,
+}
+
+impl From<LocalFile> for UploadFile {
+    fn from(local: LocalFile) -> Self {
+        Self {
+            local,
+            uid: Vec::from(crate::uid::random_bytes(&mut rand::rngs::OsRng)),
+            key: AesKey::random(),
+        }
+    }
+}
+
+impl TryFrom<&UploadFile> for Vec<u8> {
+    type Error = Error;
+
+    fn try_from(file: &UploadFile) -> Result<Self> {
+        let reserve = file
+            .local
+            .size
+            .checked_add(16)
+            .ok_or_else(|| Error::Generic(format!("{} does not fit in memory", file.local.name)))?;
+        let mut frame = vec![0; 12];
+        frame
+            .try_reserve_exact(reserve)
+            .map_err(|_| Error::Generic(format!("{} does not fit in memory", file.local.name)))?;
+        std::fs::File::open(&file.local.path)?.read_to_end(&mut frame)?;
+        frame.extend_from_slice(&[0; 16]);
+        crypto::encrypt_aes_v2_in_place(&mut frame, &file.key)?;
+        Ok(frame)
+    }
 }
 
 impl TryFrom<&UserPath> for LocalFile {
@@ -596,24 +632,6 @@ impl std::fmt::Display for MimeType {
     }
 }
 
-struct NewFile {
-    uid: Vec<u8>,
-    key: AesKey,
-}
-
-impl NewFile {
-    fn random() -> Self {
-        let mut uid = crypto::random_bytes(16);
-        if uid[0] & 0xf8 == 0xf8 {
-            uid[0] &= 0x7f;
-        }
-        Self {
-            uid,
-            key: AesKey::random(),
-        }
-    }
-}
-
 impl Run for UploadAttachment {
     fn run(self, app: &mut App) -> Result<()> {
         let files = self.files.iter().map(LocalFile::try_from).collect::<Result<Vec<_>>>()?;
@@ -632,18 +650,18 @@ impl Run for UploadAttachment {
             )));
         }
 
-        let new: Vec<NewFile> = files.iter().map(|_| NewFile::random()).collect();
-        let add = add_request(&files, &new, &session.data_key)?;
+        let files: Vec<UploadFile> = files.into_iter().map(UploadFile::from).collect();
+        let add = add_request(&files, &session.data_key)?;
         let body = session.rest.execute("vault/files_add", &session.session_token, &add)?;
         let added = FilesAddResponse::decode(body.as_slice())?;
         let http = http_client()?;
-        for (file, new_file) in files.iter().zip(&new) {
+        for file in &files {
             let target = added
                 .files
                 .iter()
-                .find(|status| status.record_uid == new_file.uid && status.status == FileAddResult::FaSuccess as i32)
-                .ok_or_else(|| Error::Generic(format!("Uploading file {}: Get upload URL error.", file.name)))?;
-            send(&http, target, file, new_file)?;
+                .find(|status| status.record_uid == file.uid && status.status == FileAddResult::FaSuccess as i32)
+                .ok_or_else(|| Error::Generic(format!("Uploading file {}: Get upload URL error.", file.local.name)))?;
+            send(&http, target, file)?;
         }
 
         let key_type = if session.summary.forbid_key_type2 {
@@ -651,7 +669,7 @@ impl Run for UploadAttachment {
         } else {
             RecordKeyType::EncryptedByPublicKey
         };
-        let rq = link_request(record, &new, key_type)?;
+        let rq = link_request(record, &files, key_type)?;
         let body = session
             .rest
             .execute("vault/records_update", &session.session_token, &rq)?;
@@ -671,23 +689,22 @@ impl Run for UploadAttachment {
     }
 }
 
-fn add_request(files: &[LocalFile], new: &[NewFile], data_key: &[u8]) -> Result<FilesAddRequest> {
+fn add_request(files: &[UploadFile], data_key: &[u8]) -> Result<FilesAddRequest> {
     Ok(FilesAddRequest {
         files:       files
             .iter()
-            .zip(new)
-            .map(|(file, new_file)| -> Result<FileEntry> {
+            .map(|file| -> Result<FileEntry> {
                 let metadata = serde_json::json!({
-                    "title": file.name,
-                    "name": file.name,
-                    "type": file.mime.to_string(),
-                    "size": file.size,
+                    "title": file.local.name,
+                    "name": file.local.name,
+                    "type": file.local.mime.to_string(),
+                    "size": file.local.size,
                 });
                 Ok(FileEntry {
-                    record_uid: new_file.uid.clone(),
-                    record_key: crypto::encrypt_aes_v2(&new_file.key, data_key)?,
-                    data: crypto::encrypt_aes_v2(metadata.to_string().as_bytes(), &new_file.key)?,
-                    file_size: i64::try_from(file.size).unwrap_or(i64::MAX).saturating_add(100),
+                    record_uid: file.uid.clone(),
+                    record_key: crypto::encrypt_aes_v2(&file.key, data_key)?,
+                    data: crypto::encrypt_aes_v2(metadata.to_string().as_bytes(), &file.key)?,
+                    file_size: i64::try_from(file.local.size).unwrap_or(i64::MAX).saturating_add(100),
                     ..Default::default()
                 })
             })
@@ -696,24 +713,8 @@ fn add_request(files: &[LocalFile], new: &[NewFile], data_key: &[u8]) -> Result<
     })
 }
 
-/// Read and encrypt the content into the Keeper nonce|ciphertext|tag frame.
-fn sealed(file: &LocalFile, key: &[u8]) -> Result<Vec<u8>> {
-    let reserve = file
-        .size
-        .checked_add(16)
-        .ok_or_else(|| Error::Generic(format!("{} does not fit in memory", file.name)))?;
-    let mut frame = vec![0; 12];
-    frame
-        .try_reserve_exact(reserve)
-        .map_err(|_| Error::Generic(format!("{} does not fit in memory", file.name)))?;
-    std::fs::File::open(&file.path)?.read_to_end(&mut frame)?;
-    frame.extend_from_slice(&[0; 16]);
-    crypto::encrypt_aes_v2_in_place(&mut frame, key)?;
-    Ok(frame)
-}
-
-fn send(http: &reqwest::blocking::Client, target: &FileAddStatus, file: &LocalFile, new: &NewFile) -> Result<()> {
-    let frame = sealed(file, &new.key)?;
+fn send(http: &reqwest::blocking::Client, target: &FileAddStatus, file: &UploadFile) -> Result<()> {
+    let frame = Vec::try_from(file)?;
     let boundary = data_encoding::HEXLOWER.encode(&crypto::random_bytes(16));
     let fields: serde_json::Map<String, Value> = serde_json::from_str(&target.parameters)?;
     let mut head = String::new();
@@ -722,7 +723,7 @@ fn send(http: &reqwest::blocking::Client, target: &FileAddStatus, file: &LocalFi
         write!(&mut head, "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
             .expect("writing multipart framing to a String cannot fail");
     }
-    let file_ref = b64_encode(&new.uid);
+    let file_ref = b64_encode(&file.uid);
     write!(
         &mut head,
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_ref}\"\r\nContent-Type: \
@@ -744,19 +745,19 @@ fn send(http: &reqwest::blocking::Client, target: &FileAddStatus, file: &LocalFi
         .send()?;
     let status = response.status().as_u16();
     if i32::from(status) != target.success_status_code {
-        return Err(Error::Generic(format!("Uploading file {}: HTTP status code {status}", file.name)));
+        return Err(Error::Generic(format!("Uploading file {}: HTTP status code {status}", file.local.name)));
     }
     Ok(())
 }
 
-fn link_request(record: &Record, new: &[NewFile], key_type: RecordKeyType) -> Result<RecordsUpdateRequest> {
+fn link_request(record: &Record, files: &[UploadFile], key_type: RecordKeyType) -> Result<RecordsUpdateRequest> {
     let mut data = record.data.clone();
     let fields = data
         .as_object_mut()
         .map(|object| object.entry("fields").or_insert_with(|| serde_json::json!([])))
         .and_then(Value::as_array_mut)
         .ok_or_else(|| Error::Generic(format!("Record {} has malformed data", record.uid)))?;
-    let refs = new.iter().map(|file| Value::from(b64_encode(&file.uid)));
+    let refs = files.iter().map(|file| Value::from(b64_encode(&file.uid)));
     let listed = fields
         .iter_mut()
         .find(|field| field["type"] == "fileRef")
@@ -775,7 +776,7 @@ fn link_request(record: &Record, new: &[NewFile], key_type: RecordKeyType) -> Re
             client_modified_time: now,
             revision: record.revision,
             data: crypto::encrypt_aes_v2(&json, &record.key)?,
-            record_links_add: new
+            record_links_add: files
                 .iter()
                 .map(|file| -> Result<RecordLink> {
                     Ok(RecordLink {
@@ -1002,20 +1003,42 @@ mod tests {
     fn add_and_link_requests_encrypt_keys_and_file_metadata() {
         let dir = temp_dir();
         std::fs::write(dir.join("notes.txt"), b"hello world").unwrap();
-        let files = [LocalFile::try_from(&UserPath(dir.join("notes.txt"))).unwrap()];
-        let new = [NewFile {
-            uid: vec![1; 16],
-            key: key(6),
-        }];
-        let add = add_request(&files, &new, &[5; 32]).unwrap();
-        let entry = &add.files[0];
-        assert_eq!(entry.record_uid, new[0].uid);
-        let file_key = crypto::decrypt_aes_v2(&entry.record_key, &[5; 32]).unwrap();
-        assert_eq!(file_key.as_slice(), &*new[0].key);
-        let metadata: Value =
-            serde_json::from_slice(&crypto::decrypt_aes_v2(&entry.data, &new[0].key).unwrap()).unwrap();
-        assert_eq!(metadata, json!({"title": "notes.txt", "name": "notes.txt", "type": "text/plain", "size": 11}));
-        assert_eq!(entry.file_size, 111);
+        std::fs::write(dir.join("report.pdf"), b"second file!").unwrap();
+        let files = [
+            UploadFile {
+                local: LocalFile::try_from(&UserPath(dir.join("notes.txt"))).unwrap(),
+                uid:   vec![1; 16],
+                key:   key(6),
+            },
+            UploadFile {
+                local: LocalFile::try_from(&UserPath(dir.join("report.pdf"))).unwrap(),
+                uid:   vec![2; 16],
+                key:   key(7),
+            },
+        ];
+        let add = add_request(&files, &[5; 32]).unwrap();
+        for (entry, file, expected_metadata, expected_size) in [
+            (
+                &add.files[0],
+                &files[0],
+                json!({"title": "notes.txt", "name": "notes.txt", "type": "text/plain", "size": 11}),
+                111i64,
+            ),
+            (
+                &add.files[1],
+                &files[1],
+                json!({"title": "report.pdf", "name": "report.pdf", "type": "application/pdf", "size": 12}),
+                112i64,
+            ),
+        ] {
+            assert_eq!(entry.record_uid, file.uid);
+            let file_key = crypto::decrypt_aes_v2(&entry.record_key, &[5; 32]).unwrap();
+            assert_eq!(file_key.as_slice(), &*file.key);
+            let metadata: Value =
+                serde_json::from_slice(&crypto::decrypt_aes_v2(&entry.data, &file.key).unwrap()).unwrap();
+            assert_eq!(metadata, expected_metadata);
+            assert_eq!(entry.file_size, expected_size);
+        }
 
         let uid = Uid::from(b"PARENT".as_slice());
         let mut parent = record(
@@ -1026,11 +1049,7 @@ mod tests {
         );
         parent.uid = uid;
         parent.revision = 41;
-        let second = [NewFile {
-            uid: vec![2; 16],
-            key: key(7),
-        }];
-        let update = link_request(&parent, &new, RecordKeyType::EncryptedByPublicKeyEcc).unwrap();
+        let update = link_request(&parent, &files, RecordKeyType::EncryptedByPublicKeyEcc).unwrap();
         assert_eq!(update.security_data_key_type, RecordKeyType::EncryptedByPublicKeyEcc as i32);
         let updated = &update.records[0];
         assert_eq!(updated.record_uid, Vec::<u8>::from(&parent.uid));
@@ -1039,13 +1058,20 @@ mod tests {
         assert!(plain.len() >= 384 && plain.len().is_multiple_of(16));
         let data: Value = serde_json::from_slice(&plain).unwrap();
         assert_eq!(data["fields"][0], parent.data["fields"][0]);
-        assert_eq!(data["fields"][1]["value"], json!(["OLD", b64_encode(&new[0].uid)]));
-        let linked_key = crypto::decrypt_aes_v2(&updated.record_links_add[0].record_key, &parent.key).unwrap();
-        assert_eq!(linked_key.as_slice(), &*new[0].key);
+        assert_eq!(data["fields"][1]["value"], json!(["OLD", b64_encode(&files[0].uid), b64_encode(&files[1].uid)]));
+        assert_eq!(updated.record_links_add.len(), files.len());
+        for (link, file) in updated.record_links_add.iter().zip(&files) {
+            assert_eq!(link.record_uid, file.uid);
+            let linked_key = crypto::decrypt_aes_v2(&link.record_key, &parent.key).unwrap();
+            assert_eq!(linked_key.as_slice(), &*file.key);
+        }
         let no_fields = record("P2", RecordKind::Typed, json!({"title": "A"}), 1);
-        assert!(link_request(&no_fields, &second, RecordKeyType::EncryptedByPublicKey).is_ok());
+        let no_fields_update = link_request(&no_fields, &files[1..], RecordKeyType::EncryptedByPublicKey).unwrap();
+        let no_fields_data = crypto::decrypt_aes_v2(&no_fields_update.records[0].data, &no_fields.key).unwrap();
+        let no_fields_data: Value = serde_json::from_slice(&no_fields_data).unwrap();
+        assert_eq!(no_fields_data["fields"], json!([{"type": "fileRef", "value": [b64_encode(&files[1].uid)]}]));
         let malformed = record("P3", RecordKind::Typed, json!(["not", "an", "object"]), 1);
-        assert!(link_request(&malformed, &second, RecordKeyType::EncryptedByPublicKey).is_err());
+        assert!(link_request(&malformed, &files[1..], RecordKeyType::EncryptedByPublicKey).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1226,10 +1252,10 @@ mod tests {
         let dir = temp_dir();
         let content: Vec<u8> = (0..=255u8).cycle().take(50_000).collect();
         std::fs::write(dir.join("report.pdf"), &content).unwrap();
-        let file = LocalFile::try_from(&UserPath(dir.join("report.pdf"))).unwrap();
-        let new = NewFile {
-            uid: vec![5; 16],
-            key: key(9),
+        let file = UploadFile {
+            local: LocalFile::try_from(&UserPath(dir.join("report.pdf"))).unwrap(),
+            uid:   vec![5; 16],
+            key:   key(9),
         };
         let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
         let server = serve_once("201 Created", Vec::new());
@@ -1239,7 +1265,7 @@ mod tests {
             success_status_code: 201,
             ..Default::default()
         };
-        send(&http, &target, &file, &new).unwrap();
+        send(&http, &target, &file).unwrap();
         let request = server.worker.join().unwrap();
         let head_end = request.windows(4).position(|window| window == b"\r\n\r\n").unwrap() + 4;
         let head = String::from_utf8(request[..head_end].to_vec()).unwrap().to_lowercase();
@@ -1268,7 +1294,7 @@ mod tests {
             let headers = std::str::from_utf8(&remaining[..header_end]).unwrap().to_owned();
             let payload = &remaining[header_end + 4..];
             if headers.starts_with("Content-Disposition: form-data; name=\"file\";") {
-                let file_ref = b64_encode(&new.uid);
+                let file_ref = b64_encode(&file.uid);
                 assert_eq!(
                     headers,
                     format!(
@@ -1301,7 +1327,7 @@ mod tests {
         assert_eq!(fields.len(), 2);
         assert_eq!(fields.get("key").map(Vec::as_slice), Some(b"uploads/abc".as_slice()));
         assert_eq!(fields.get("policy").map(Vec::as_slice), Some(b"p".as_slice()));
-        assert_eq!(crypto::decrypt_aes_v2(encrypted, &new.key).unwrap(), content);
+        assert_eq!(crypto::decrypt_aes_v2(encrypted, &file.key).unwrap(), content);
 
         let server = serve_once("200 OK", Vec::new());
         let target = FileAddStatus {
@@ -1310,7 +1336,7 @@ mod tests {
             success_status_code: 201,
             ..Default::default()
         };
-        assert!(send(&http, &target, &file, &new).is_err());
+        assert!(send(&http, &target, &file).is_err());
         server.worker.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }

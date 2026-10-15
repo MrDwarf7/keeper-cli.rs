@@ -24,6 +24,12 @@ text allowed by the disclosure policy. Masked views retain replacement text, not
 the source secret. Formatting and JSON serialization use standard trait support;
 search and clipboard lookup explicitly request revealed values.
 
+Each prepared attachment owns its validated local file, generated UID, and AES
+key. `From<LocalFile>` binds them once; `TryFrom<&UploadFile>` seals the
+contents with that same key. Registration, transfer, and record linking use
+those values directly, so file-to-key pairing cannot drift between parallel
+collections.
+
 Protocol behavior is derived from descriptors embedded in Commander's generated
 Python modules and from Commander's source.
 
