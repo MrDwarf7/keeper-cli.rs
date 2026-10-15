@@ -151,23 +151,28 @@ impl Run for Mkdir {
         };
         let tint = Tint::from(color);
         {
-            let (session, vault, cwd) = connect(app)?;
+            app.ensure_synced()?;
+            let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+            let session = &mut account.session;
+            let cwd = &account.cwd;
             let (parent, mut name) = match folder.as_deref().filter(|f| !f.trim().is_empty()) {
-                None => (cwd.clone(), String::new()),
+                None => (None, String::new()),
                 Some(path) => {
                     match locate(vault, cwd, path) {
                         Target::Folder(_) => {
                             eprintln!("mkdir: Folder \"{path}\" already exists");
                             return Ok(());
                         }
-                        Target::Within { parent, name } => (parent, name),
+                        Target::Within { parent, name } => (Some(parent), name),
                         Target::Missing => {
                             return Err(Error::Generic(format!("mkdir: The folder part of \"{path}\" does not exist")));
                         }
                     }
                 }
             };
-            let base = Place::from(vault.folder(&parent));
+            let parent = parent.as_ref().unwrap_or(cwd);
+            let base = Place::from(vault.folder(parent));
             let home = Realm::try_from((vault, base))?;
             let kind = match (wanted, home) {
                 (Wanted::Shared(_), Realm::Shared { .. }) => {
@@ -207,7 +212,7 @@ impl Run for Mkdir {
                 parent: base,
             })?;
             session.execute_v2(serde_json::to_value(request)?)?;
-            let path = format!("{}{name}", Trail(vault, &parent));
+            let path = format!("{}{name}", Trail(vault, parent));
             println!("{}", serde_json::json!({ "folder_uid": uid.to_string(), "name": name, "path": path }));
         };
         app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
@@ -227,7 +232,11 @@ impl Run for Rmdir {
             _ => Report::Show,
         };
         {
-            let (session, vault, cwd) = connect(app)?;
+            app.ensure_synced()?;
+            let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+            let session = &mut account.session;
+            let cwd = &account.cwd;
             let mut doomed: Vec<&Folder> = Vec::new();
             for pattern in &pattern {
                 let found: Vec<&Folder> = match locate(vault, cwd, pattern) {
@@ -317,7 +326,11 @@ impl Run for Rndir {
             false => Report::Show,
         };
         {
-            let (session, vault, cwd) = connect(app)?;
+            app.ensure_synced()?;
+            let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+            let session = &mut account.session;
+            let cwd = &account.cwd;
             let uid = match locate(vault, cwd, &path) {
                 Target::Folder(Location::Folder(uid)) => uid,
                 Target::Folder(Location::Root) => {
@@ -358,7 +371,11 @@ impl Run for Mv {
             (false, false) => Match::Records,
         };
         {
-            let (session, vault, cwd) = connect(app)?;
+            app.ensure_synced()?;
+            let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+            let session = &mut account.session;
+            let cwd = &account.cwd;
             let dst = vault
                 .resolve_folder(cwd, &dst)
                 .ok_or_else(|| Error::Generic("mv: Destination path should be existing folder".into()))?;
@@ -381,13 +398,6 @@ impl Run for Mv {
     }
 }
 
-/// Logged-in session, synced vault and current folder; writes invalidate the cached vault.
-fn connect(app: &mut App) -> Result<(&mut Session, &Vault, &Location)> {
-    app.ensure_synced()?;
-    let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-    let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-    Ok((&mut account.session, vault, &account.cwd))
-}
 
 #[derive(Clone, Copy, Debug)]
 enum Wanted {
