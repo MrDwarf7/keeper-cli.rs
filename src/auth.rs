@@ -204,7 +204,7 @@ pub fn login(config: &mut Settings, user: String, password: Password) -> Result<
     let mut retry = DeviceRetry::Available;
     loop {
         let result = LoginFlow {
-            rest: RestContext::new(config.server())?,
+            rest: RestContext::new(config.server.as_deref().unwrap_or(crate::settings::DEFAULT_SERVER))?,
             config,
             user: user.clone(),
             password: PasswordState::Pending(password.clone()),

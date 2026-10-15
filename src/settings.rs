@@ -73,10 +73,6 @@ impl Settings {
         Ok(settings)
     }
 
-    pub fn server(&self) -> &str {
-        self.server.as_deref().unwrap_or(DEFAULT_SERVER)
-    }
-
     /// Update the file atomically; stored credentials never follow a symlink or persist passwords.
     pub fn save(&self) -> Result<()> {
         reject_symlink(&self.path)?;
@@ -184,7 +180,7 @@ mod tests {
 
         let mut settings = Settings::load(path.clone()).unwrap();
         assert_eq!(settings.user.as_deref(), Some("a@b.c"));
-        assert_eq!(settings.server(), DEFAULT_SERVER);
+        assert!(settings.server.is_none());
         settings.clone_code = None;
         settings.device_token = Some("tok".into());
         settings.save().unwrap();
