@@ -5,14 +5,11 @@
 //! and account recovery. SSO users fall back to their "alternate" master password, the same
 //! fallback Commander offers.
 
-use std::fmt;
 use std::io::{BufRead, Write};
 use std::str::FromStr;
 
-use p256::SecretKey;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use prost::Message;
-use rsa::RsaPrivateKey;
 
 use crate::crypto::{self, AesKey};
 use crate::prelude::*;
@@ -51,14 +48,18 @@ pub struct Session {
     pub user:          String,
     pub session_token: Vec<u8>,
     pub data_key:      AesKey,
-    pub rsa_key:       Option<RsaPrivateKey>,
-    pub ecc_key:       Option<SecretKey>,
+    pub rsa_key:       Option<rsa::RsaPrivateKey>,
+    pub ecc_key:       Option<p256::SecretKey>,
     pub summary:       AccountSummaryElements,
 }
 
 impl Session {
     /// Registers this device's public-key-encrypted copy of the account data key.
-    pub fn register_device_data_key(&mut self, device_token: Vec<u8>, device_key: &SecretKey) -> Result<Registration> {
+    pub fn register_device_data_key(
+        &mut self,
+        device_token: Vec<u8>,
+        device_key: &p256::SecretKey,
+    ) -> Result<Registration> {
         let request = RegisterDeviceDataKeyRequest {
             encrypted_device_token:    device_token,
             encrypted_device_data_key: crypto::encrypt_ec(&self.data_key, &device_key.public_key())?,
@@ -133,10 +134,6 @@ pub fn prompt(message: &str) -> Result<String> {
         return Err(Error::Cancelled);
     }
     Ok(line.trim().to_owned())
-}
-
-fn prompt_password(message: &str) -> Result<String> {
-    Ok(rpassword::prompt_password(message)?)
 }
 
 fn device_name() -> String {
@@ -408,20 +405,20 @@ impl LoginFlow<'_> {
             .map_err(regional_registration_failure)
     }
 
-    fn device_key(&self) -> Result<SecretKey> {
+    fn device_key(&self) -> Result<p256::SecretKey> {
         let encoded = self
             .config
             .private_key
             .as_deref()
             .ok_or_else(|| Error::Generic("device private key missing from config".into()))?;
-        Ok(SecretKey::from_slice(&decode_credential(encoded, "device private key")?)?)
+        Ok(p256::SecretKey::from_slice(&decode_credential(encoded, "device private key")?)?)
     }
 
     fn device_token(&mut self) -> Result<Vec<u8>> {
         if let Some(token) = &self.config.device_token {
             return decode_credential(token, "device token");
         }
-        let private = SecretKey::random(&mut rand::rngs::OsRng);
+        let private = p256::SecretKey::random(&mut rand::rngs::OsRng);
         let request = DeviceRegistrationRequest {
             client_version: CLIENT_VERSION.into(),
             device_name: device_name(),
@@ -453,7 +450,7 @@ impl LoginFlow<'_> {
                 PasswordState::Pending(Password::Given(password)) => password.clone(),
                 PasswordState::Pending(Password::Prompt) => {
                     eprintln!("Enter master password for {}", self.user);
-                    let password = prompt_password("Password: ")?;
+                    let password = rpassword::prompt_password("Password: ")?;
                     if password.is_empty() {
                         return Err(Error::Cancelled);
                     }
@@ -519,11 +516,25 @@ impl LoginFlow<'_> {
                         .map(|()| eprintln!("Email sent to {}. Click the approval link, then press Enter.", self.user))
                 }
                 "2" | "kp" | "keeper_push" => {
-                    self.send_push(&response.encrypted_login_token, TwoFactorPushType::TwoFaPushKeeper, Vec::new())
+                    let request = TwoFactorSendPushRequest {
+                        encrypted_login_token: response.encrypted_login_token.clone(),
+                        push_type: TwoFactorPushType::TwoFaPushKeeper as i32,
+                        ..Default::default()
+                    };
+                    self.rest
+                        .execute("authentication/2fa_send_push", &[], &request)
+                        .map(drop)
                         .map(|()| eprintln!("Push notification sent. Approve on your device, then press Enter."))
                 }
                 "3" | "2fs" | "2fa_send" => {
-                    self.send_push(&response.encrypted_login_token, TwoFactorPushType::TwoFaPushNone, Vec::new())
+                    let request = TwoFactorSendPushRequest {
+                        encrypted_login_token: response.encrypted_login_token.clone(),
+                        push_type: TwoFactorPushType::TwoFaPushNone as i32,
+                        ..Default::default()
+                    };
+                    self.rest
+                        .execute("authentication/2fa_send_push", &[], &request)
+                        .map(drop)
                         .map(|()| eprintln!("2FA code sent. Enter it with 'c <code>'."))
                 }
                 selection if selection == "c" || selection.starts_with("c ") => {
@@ -548,14 +559,20 @@ impl LoginFlow<'_> {
                             Err(error) if is_device_not_registered(&error) => return Err(error),
                             result => {
                                 result.map(drop).or_else(|_| {
-                                    self.validate_2fa(
-                                        &response.encrypted_login_token,
-                                        &code,
-                                        TwoFactorValueType::TwoFaCodeNone,
-                                        Vec::new(),
-                                        TwoFactorExpiration::TwoFaExpImmediately,
-                                    )
-                                    .map(drop)
+                                    let request = TwoFactorValidateRequest {
+                                        encrypted_login_token: response.encrypted_login_token.clone(),
+                                        value: code.clone(),
+                                        value_type: TwoFactorValueType::TwoFaCodeNone as i32,
+                                        expire_in: TwoFactorExpiration::TwoFaExpImmediately as i32,
+                                        ..Default::default()
+                                    };
+                                    self.rest
+                                        .execute("authentication/2fa_validate", &[], &request)
+                                        .and_then(|body| {
+                                            TwoFactorValidateResponse::decode(body.as_slice())
+                                                .map(drop)
+                                                .map_err(Error::from)
+                                        })
                                 })
                             }
                         };
@@ -580,38 +597,6 @@ impl LoginFlow<'_> {
                 eprintln!("{error}");
             }
         }
-    }
-
-    fn send_push(&mut self, login_token: &[u8], push_type: TwoFactorPushType, channel_uid: Vec<u8>) -> Result<()> {
-        let request = TwoFactorSendPushRequest {
-            encrypted_login_token: login_token.to_vec(),
-            push_type: push_type as i32,
-            channel_uid,
-            ..Default::default()
-        };
-        self.rest
-            .execute("authentication/2fa_send_push", &[], &request)
-            .map(drop)
-    }
-
-    fn validate_2fa(
-        &mut self,
-        login_token: &[u8],
-        code: &str,
-        value_type: TwoFactorValueType,
-        channel_uid: Vec<u8>,
-        expire_in: TwoFactorExpiration,
-    ) -> Result<Vec<u8>> {
-        let request = TwoFactorValidateRequest {
-            encrypted_login_token: login_token.to_vec(),
-            value: code.to_owned(),
-            value_type: value_type as i32,
-            channel_uid,
-            expire_in: expire_in as i32,
-            ..Default::default()
-        };
-        let body = self.rest.execute("authentication/2fa_validate", &[], &request)?;
-        Ok(TwoFactorValidateResponse::decode(body.as_slice())?.encrypted_login_token)
     }
 
     fn two_factor(&mut self, response: &LoginResponse) -> Result<Vec<u8>> {
@@ -658,17 +643,22 @@ impl LoginFlow<'_> {
         let value_type = TwoFactorValueType::from(channel_type);
 
         if channel_type == Channel::Sms {
-            match self.send_push(
-                &response.encrypted_login_token,
-                TwoFactorPushType::TwoFaPushSms,
-                channel.channel_uid.clone(),
-            ) {
+            let request = TwoFactorSendPushRequest {
+                encrypted_login_token: response.encrypted_login_token.clone(),
+                push_type: TwoFactorPushType::TwoFaPushSms as i32,
+                channel_uid: channel.channel_uid.clone(),
+                ..Default::default()
+            };
+            match self
+                .rest
+                .execute("authentication/2fa_send_push", &[], &request)
+                .map(drop)
+            {
                 Ok(()) => eprintln!("SMS sent successfully."),
                 Err(error) if is_device_not_registered(&error) => return Err(error),
                 Err(_) => eprintln!("Was unable to send SMS."),
             }
         }
-
         let durations = [
             Expiration(TwoFactorExpiration::TwoFaExpImmediately),
             Expiration(TwoFactorExpiration::TwoFaExp12Hours),
@@ -699,13 +689,19 @@ impl LoginFlow<'_> {
             if answer.is_empty() {
                 continue;
             }
-            match self.validate_2fa(
-                &response.encrypted_login_token,
-                &answer,
-                value_type,
-                channel.channel_uid.clone(),
-                duration.0,
-            ) {
+            let request = TwoFactorValidateRequest {
+                encrypted_login_token: response.encrypted_login_token.clone(),
+                value: answer.clone(),
+                value_type: value_type as i32,
+                channel_uid: channel.channel_uid.clone(),
+                expire_in: duration.0 as i32,
+                ..Default::default()
+            };
+            let result = self
+                .rest
+                .execute("authentication/2fa_validate", &[], &request)
+                .and_then(|body| Ok(TwoFactorValidateResponse::decode(body.as_slice())?.encrypted_login_token));
+            match result {
                 Ok(token) => {
                     eprintln!("2FA code verified.");
                     return Ok(token);
@@ -807,7 +803,7 @@ impl LoginFlow<'_> {
             }
             if !keys.encrypted_ecc_private_key.is_empty() {
                 let raw = crypto::decrypt_aes_v2(&keys.encrypted_ecc_private_key, &session.data_key)?;
-                session.ecc_key = Some(SecretKey::from_slice(&raw)?);
+                session.ecc_key = Some(p256::SecretKey::from_slice(&raw)?);
             }
         }
         session.summary = summary;
@@ -879,8 +875,8 @@ impl From<Channel> for TwoFactorValueType {
     }
 }
 
-impl fmt::Display for Channel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Totp => "TOTP (Google and Microsoft Authenticator)",
             Self::Sms => "Send SMS Code",
@@ -924,8 +920,8 @@ impl FromStr for Expiration {
     }
 }
 
-impl fmt::Display for Expiration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Expiration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self.0 {
             TwoFactorExpiration::TwoFaExpImmediately | TwoFactorExpiration::TwoFaExp5Minutes => "Require Every Login",
             TwoFactorExpiration::TwoFaExp12Hours => "Ask Every 12 hours",
