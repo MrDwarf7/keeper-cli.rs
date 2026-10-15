@@ -115,6 +115,9 @@ Record and folder changes, attachment transfer, and clipboard/password commands
 are implemented. The vault sync is a full download each time; it does not use
 incremental history.
 
+Downloads never overwrite existing files. A failed disk write can leave a
+partial new file; the command reports the failure.
+
 These features are not implemented:
 
 - SSO, WebAuthn/FIDO security keys, passkeys, biometrics, and account recovery.
