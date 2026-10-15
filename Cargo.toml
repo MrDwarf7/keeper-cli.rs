@@ -7,7 +7,7 @@ name = "keeper-cli"
 version     = "0.1.0"
 authors     = [ "MrDwarf7", "Blake B. <github.com/MrDwarf7>" ]
 edition     = "2024"
-description = "It does cool stuff!"
+description = "Keeper Password Manager CLI: a Rust rebuild of Keeper Commander's core"
 # license = "MIT"
 license-file = "LICENSE"
 readme       = "README.md"
@@ -18,15 +18,11 @@ build        = "build.rs"
 ######################################################################################################################################################
 ######################################################################################################################################################
 
-[features]
-default = [ "macros" ]
-macros  = [  ]
-# debug   = [  ]
 
 # Windows exe icon + version info (release builds). Assets under assets/icon.ico.
 [package.metadata.winresource]
-OriginalFilename = "rust_template.exe"
-FileDescription  = "It does cool stuff!"
+OriginalFilename = "keeper-cli.exe"
+FileDescription  = "Keeper Password Manager CLI"
 LegalCopyright   = "Copyright (c) Blake B. @github.com/MrDwarf7"
 #CompanyName = "https://github.com/MrDwarf7"
 
