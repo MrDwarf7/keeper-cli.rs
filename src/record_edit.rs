@@ -673,7 +673,8 @@ fn verdict(rs: &pb::RecordsModifyResponse, uid: &Uid) -> Result<()> {
 //
 // Everything the write commands need to know about the synced vault is read here.
 
-/// Resolves `--folder` (a path or UID) to where a record is filed.
+/// Resolves `--folder` (a path or UID) to where a record is filed. Commander quietly files the
+/// record at the root when the folder doesn't resolve; a typo shouldn't put credentials there.
 fn placement(vault: &Vault, cwd: &str, path: &str) -> Result<Placement> {
     let uid = resolve_folder(vault, cwd, path).ok_or_else(|| Error::Generic(format!("Folder not found: {path}")))?;
     let Some(folder) = vault.folders.get(&uid) else {
@@ -823,6 +824,8 @@ fn find(vault: &Vault, cwd: &str, name: &str) -> Result<Vec<Filing>> {
         });
     }
 
+    // ponytail: a path that names several same-named sibling folders resolves to the first;
+    // Commander searches all of them. Walk every match here if duplicate folder names matter.
     let Name { folder: dir, title } = Name::from(name);
     let lower = title.to_lowercase();
     let mut found = Vec::new();

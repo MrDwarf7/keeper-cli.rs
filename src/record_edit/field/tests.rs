@@ -514,3 +514,34 @@ fn def_names_cover_every_field_type_and_the_named_record_fields() {
     assert_eq!(d.multiple, Multiple::Always);
     assert!("nope".parse::<Def>().is_err());
 }
+
+#[test]
+fn a_new_record_serializes_to_the_json_commander_writes() {
+    let def: TypeDef = serde_json::from_str(
+        r#"{"$id": "login", "fields": [{"$ref": "login", "required": true}, {"$ref": "password"}, {"$ref": "url"}]}"#,
+    )
+    .unwrap();
+    let mut body = Body {
+        type_name: "login".into(),
+        title: "T".into(),
+        notes: "n".into(),
+        fields: def.fields.iter().map(|f| f.blank(Labels::On)).collect(),
+        ..Body::default()
+    };
+    edit(&mut body, &["login=bob", "c.text.Pin=1234"]);
+    // Empty labels and false "required" flags are omitted; every other key is always present.
+    assert_eq!(
+        serde_json::to_value(&body).unwrap(),
+        json!({
+            "type": "login",
+            "title": "T",
+            "notes": "n",
+            "fields": [
+                {"type": "login", "label": "login", "value": ["bob"], "required": true},
+                {"type": "password", "label": "password", "value": []},
+                {"type": "url", "label": "url", "value": []}
+            ],
+            "custom": [{"type": "text", "label": "Pin", "value": ["1234"]}]
+        })
+    );
+}
