@@ -1,0 +1,3931 @@
+
+ôŒ
+APIRequest.protoAuthenticationenterprise.proto"{
+QrcMessageKey
+clientEcPublicKey (
+mlKemEncapsulatedKey (
+data (
+
+msgVersion (
+ecKeyId ("Ê
+
+ApiRequest 
+encryptedTransmissionKey (
+publicKeyId (
+locale (	
+encryptedPayload (
+encryptionType (
+	recaptcha (	
+subEnvironment (	4
+qrcMessageKey (2.Authentication.QrcMessageKey"j
+ApiRequestPayload
+payload (
+encryptedSessionToken (
+	timeToken (
+
+apiVersion ("6
+	Transform
+key (
+encryptedDeviceToken ("†
+DeviceRequest
+clientVersion (	
+
+deviceName (	
+devicePlatform (	:
+clientFormFactor (2 .Authentication.ClientFormFactor
+username (	"T
+AuthRequest
+clientVersion (	
+username (	
+encryptedDeviceToken ("√
+NewUserMinimumParams
+minimumIterations (
+passwordMatchRegex (	 
+passwordMatchDescription (	
+isEnterpriseDomain (
+enterpriseEccPublicKey (
+forbidKeyType2 ("â
+PreLoginRequest0
+authRequest (2.Authentication.AuthRequest,
+	loginType (2.Authentication.LoginType
+twoFactorToken ("Ä
+LoginRequest0
+authRequest (2.Authentication.AuthRequest,
+	loginType (2.Authentication.LoginType
+authenticationHashPrime (
+encryptedLoginToken (
+authResponse (
+mcEnterpriseId (
+
+push_token (	
+platform (	"\
+DeviceResponse
+encryptedDeviceToken (,
+status (2.Authentication.DeviceStatus"V
+Salt
+
+iterations (
+salt (
+	algorithm (
+uid (
+name (	" 
+TwoFactorChannel
+type ("¸
+StartLoginRequest
+encryptedDeviceToken (
+username (	
+clientVersion (	
+messageSessionUid (
+encryptedLoginToken (,
+	loginType (2.Authentication.LoginType
+mcEnterpriseId (0
+loginMethod (2.Authentication.LoginMethod
+forceNewLogin	 (
+	cloneCode
+ (
+v2TwoFactorToken (	
+
+accountUid (
+fromSessionToken ("¡
+KeysInfo
+encryptionParams (
+encryptedDataKey (
+dataKeyBackupDate (
+userAuthUid (
+encryptedPrivateKey (
+encryptedEccPrivateKey (
+eccPublicKey ("Ê
+LoginResponse.
+
+loginState (2.Authentication.LoginState
+
+accountUid (
+primaryUsername (	
+encryptedDataKey (B
+encryptedDataKeyType (2$.Authentication.EncryptedDataKeyType
+encryptedLoginToken (
+encryptedSessionToken (:
+sessionTokenType (2 .Authentication.SessionTokenType
+message	 (	
+url
+ (	6
+channels (2$.Authentication.TwoFactorChannelInfo"
+salt (2.Authentication.Salt
+	cloneCode (
+stateSpecificValue (	
+ssoClientVersion (	 
+sessionTokenTypeModifier (	*
+keysInfo (2.Authentication.KeysInfo
+	clientKey ("v
+SwitchListElement
+username (	
+fullName (	
+authRequired (
+isLinked (
+profilePicUrl (	"I
+SwitchListResponse3
+elements (2!.Authentication.SwitchListElement"å
+SsoUserInfo
+companyName (	
+samlRequest (	
+samlRequestType (	
+ssoDomainName (	
+loginUrl (	
+	logoutUrl (	"÷
+PreLoginResponse2
+deviceStatus (2.Authentication.DeviceStatus"
+salt (2.Authentication.Salt8
+OBSOLETE_FIELD (2 .Authentication.TwoFactorChannel0
+ssoUserInfo (2.Authentication.SsoUserInfo"&
+LoginAsUserRequest
+username (	"W
+LoginAsUserResponse
+encryptedSessionToken (!
+encryptedSharedAccountKey ("Ñ
+ValidateAuthHashRequest6
+passwordMethod (2.Authentication.PasswordMethod
+authResponse (
+encryptedLoginToken ("‹
+TwoFactorChannelInfo9
+channelType (2$.Authentication.TwoFactorChannelType
+channel_uid (
+channelName (	
+	challenge (	
+capabilities (	
+phoneNumber (	:
+maxExpiration (2#.Authentication.TwoFactorExpiration
+	createdOn (:
+lastFrequency	 (2#.Authentication.TwoFactorExpiration
+challengeToken
+ ("d
+TwoFactorDuoStatus
+capabilities (	
+phoneNumber (	
+
+enroll_url (	
+message (	"«
+TwoFactorAddRequest9
+channelType (2$.Authentication.TwoFactorChannelType
+channel_uid (
+channelName (	
+phoneNumber (	6
+duoPushType (2!.Authentication.TwoFactorPushType"B
+TwoFactorRenameRequest
+channel_uid (
+channelName (	"=
+TwoFactorAddResponse
+	challenge (	
+
+backupKeys (	"-
+TwoFactorDeleteRequest
+channel_uid ("a
+TwoFactorListResponse6
+channels (2$.Authentication.TwoFactorChannelInfo
+expireOn ("Y
+ TwoFactorUpdateExpirationRequest5
+expireIn (2#.Authentication.TwoFactorExpiration"·
+TwoFactorValidateRequest
+encryptedLoginToken (5
+	valueType (2".Authentication.TwoFactorValueType
+value (	
+channel_uid (5
+expireIn (2#.Authentication.TwoFactorExpiration
+challengeToken ("8
+TwoFactorValidateResponse
+encryptedLoginToken ("∏
+TwoFactorSendPushRequest
+encryptedLoginToken (3
+pushType (2!.Authentication.TwoFactorPushType
+channel_uid (5
+expireIn (2#.Authentication.TwoFactorExpiration"É
+License
+created (
+
+expiration (4
+licenseStatus (2.Authentication.LicenseStatus
+paid (
+message (	"G
+OwnerlessRecord
+	recordUid (
+	recordKey (
+status ("L
+OwnerlessRecords8
+ownerlessRecord (2.Authentication.OwnerlessRecord"◊
+UserAuthRequest
+uid (
+salt (
+
+iterations (
+encryptedClientKey (
+authHash (
+encryptedDataKey (,
+	loginType (2.Authentication.LoginType
+name (	
+	algorithm	 ("
+
+UidRequest
+uid ("ˇ
+DeviceUpdateRequest
+encryptedDeviceToken (
+clientVersion (	
+
+deviceName (	
+devicePublicKey (2
+deviceStatus (2.Authentication.DeviceStatus
+devicePlatform (	:
+clientFormFactor (2 .Authentication.ClientFormFactor"Ä
+DeviceUpdateResponse
+encryptedDeviceToken (
+clientVersion (	
+
+deviceName (	
+devicePublicKey (2
+deviceStatus (2.Authentication.DeviceStatus
+devicePlatform (	:
+clientFormFactor (2 .Authentication.ClientFormFactor"’
+RegisterDeviceInRegionRequest
+encryptedDeviceToken (
+clientVersion (	
+
+deviceName (	
+devicePublicKey (
+devicePlatform (	:
+clientFormFactor (2 .Authentication.ClientFormFactor"¯
+RegistrationRequest0
+authRequest (2.Authentication.AuthRequest8
+userAuthRequest (2.Authentication.UserAuthRequest
+encryptedClientKey (
+encryptedPrivateKey (
+	publicKey (
+verificationCode (	
+deprecatedAuthHashHash ($
+deprecatedEncryptedClientKey (%
+deprecatedEncryptedPrivateKey	 ("
+deprecatedEncryptionParams
+ ("–
+ConvertUserToV3Request0
+authRequest (2.Authentication.AuthRequest8
+userAuthRequest (2.Authentication.UserAuthRequest
+encryptedClientKey (
+encryptedPrivateKey (
+	publicKey ("$
+RevisionResponse
+revision ("&
+ChangeEmailRequest
+newEmail (	"8
+ChangeEmailResponse!
+encryptedChangeEmailToken ("6
+EmailVerificationLinkResponse
+emailVerified (")
+SecurityData
+uid (
+data ("@
+SecurityScoreData
+uid (
+data (
+revision ("ã
+SecurityDataRequest8
+recordSecurityData (2.Authentication.SecurityData@
+masterPasswordSecurityData (2.Authentication.SecurityData4
+encryptionType (2.Enterprise.EncryptedKeyTypeB
+recordSecurityScoreData (2!.Authentication.SecurityScoreData"∆
+SecurityReportIncrementalData
+enterpriseUserId (
+currentSecurityData (#
+currentSecurityDataRevision (
+oldSecurityData (
+oldSecurityDataRevision (?
+currentDataEncryptionType (2.Enterprise.EncryptedKeyType;
+oldDataEncryptionType (2.Enterprise.EncryptedKeyType
+	recordUid ("ü
+SecurityReport
+enterpriseUserId (
+encryptedReportData (
+revision (
+	twoFactor (	
+	lastLogin (
+numberOfReusedPassword (T
+securityReportIncrementalData (2-.Authentication.SecurityReportIncrementalData
+userId (
+hasOldEncryption	 ("n
+SecurityReportSaveRequest6
+securityReport (2.Authentication.SecurityReport
+continuationToken (")
+SecurityReportRequest
+fromPage ("ı
+SecurityReportResponse
+enterprisePrivateKey (6
+securityReport (2.Authentication.SecurityReport
+asOfRevision (
+fromPage (
+toPage (
+complete (
+enterpriseEccPrivateKey (
+hasIncrementalData (";
+IncrementalSecurityDataRequest
+continuationToken ("í
+IncrementalSecurityDataResponseT
+securityReportIncrementalData (2-.Authentication.SecurityReportIncrementalData
+continuationToken ("'
+ReusedPasswordsRequest
+count (">
+SummaryConsoleReport
+
+reportType (
+
+reportData ("|
+ChangeToKeyTypeOne/
+
+objectType (2.Authentication.ObjectTypes
+
+primaryUid (
+secondaryUid (
+key ("[
+ChangeToKeyTypeOneRequest>
+changeToKeyTypeOne (2".Authentication.ChangeToKeyTypeOne"U
+ChangeToKeyTypeOneStatus
+uid (
+type (	
+status (	
+reason (	"h
+ChangeToKeyTypeOneResponseJ
+changeToKeyTypeOneStatus (2(.Authentication.ChangeToKeyTypeOneStatus"π
+GetChangeKeyTypesRequest=
+onlyTheseObjects (2#.Authentication.EncryptedObjectType
+limit (
+includeRecommended (
+includeKeys (
+includeAllowedKeyTypes ("Ç
+GetChangeKeyTypesResponse+
+keys (2.Authentication.ChangeKeyType8
+allowedKeyTypes (2.Authentication.AllowedKeyTypes"Å
+AllowedKeyTypes7
+
+objectType (2#.Authentication.EncryptedObjectType5
+allowedKeyTypes (2.Enterprise.EncryptedKeyType"=
+ChangeKeyTypes+
+keys (2.Authentication.ChangeKeyType"÷
+ChangeKeyType7
+
+objectType (2#.Authentication.EncryptedObjectType
+uid (
+secondaryUid (
+key (-
+keyType (2.Enterprise.EncryptedKeyType-
+status (2.Authentication.GenericStatus"!
+SetKey
+
+id (
+key ("5
+SetKeyRequest$
+keys (2.Authentication.SetKey"í
+CreateUserRequest
+username (	
+authVerifier (
+encryptionParams (
+rsaPublicKey (
+rsaEncryptedPrivateKey (
+eccPublicKey (
+eccEncryptedPrivateKey (
+encryptedDeviceToken (
+encryptedClientKey	 (
+clientVersion
+ (	
+encryptedDeviceDataKey (
+encryptedLoginToken (
+messageSessionUid (
+installReferrer (	
+mccMNC (
+mfg (	
+model (	
+brand (	
+product (	
+device (	
+carrier (	
+verificationCode (	B
+enterpriseRegistration (2".Enterprise.EnterpriseRegistration"
+encryptedVerificationToken (
+enterpriseUsersDataKey ("W
+!NodeEnforcementAddOrUpdateRequest
+nodeId (
+enforcement (	
+value (	"C
+NodeEnforcementRemoveRequest
+nodeId (
+enforcement (	"∑
+ApiRequestByKey
+keyId (
+payload (
+username (	
+locale (	<
+supportedLanguage (2!.Authentication.SupportedLanguage
+type (
+parentThreadId (	"«
+ApiRequestByKAtoKAKey,
+sourceRegion (2.Authentication.Region
+payload (<
+supportedLanguage (2!.Authentication.SupportedLanguage1
+destinationRegion (2.Authentication.Region".
+MemcacheRequest
+key (	
+userId (".
+MemcacheResponse
+key (	
+value (	"w
+MasterPasswordReentryRequest
+pbkdf2Password (	?
+action (2/.Authentication.MasterPasswordReentryActionType"\
+MasterPasswordReentryResponse;
+status (2+.Authentication.MasterPasswordReentryStatus"≈
+DeviceRegistrationRequest
+clientVersion (	
+
+deviceName (	
+devicePublicKey (
+devicePlatform (	:
+clientFormFactor (2 .Authentication.ClientFormFactor
+username (	"ö
+DeviceVerificationRequest
+encryptedDeviceToken (
+username (	
+verificationChannel (	
+messageSessionUid (
+clientVersion (	"≤
+DeviceVerificationResponse
+encryptedDeviceToken (
+username (	
+messageSessionUid (
+clientVersion (	2
+deviceStatus (2.Authentication.DeviceStatus"»
+DeviceApprovalRequest
+email (	
+twoFactorChannel (	
+clientVersion (	
+locale (	
+encryptedDeviceToken (
+totpCode (	
+deviceIp (	
+deviceTokenExpireDays (	"9
+DeviceApprovalResponse
+encryptedTwoFactorToken ("~
+ApproveDeviceRequest
+encryptedDeviceToken (
+encryptedDeviceDataKey (
+denyApproval (
+
+linkDevice ("E
+EnterpriseUserAliasRequest
+enterpriseUserId (
+alias (	"Y
+EnterpriseUserAddAliasRequest
+enterpriseUserId (
+alias (	
+primary ("w
+EnterpriseUserAddAliasRequestV2T
+enterpriseUserAddAliasRequest (2-.Authentication.EnterpriseUserAddAliasRequest"H
+EnterpriseUserAddAliasStatus
+enterpriseUserId (
+status (	"^
+EnterpriseUserAddAliasResponse<
+status (2,.Authentication.EnterpriseUserAddAliasStatus"&
+Device
+encryptedDeviceToken ("\
+RegisterDeviceDataKeyRequest
+encryptedDeviceToken (
+encryptedDeviceDataKey ("n
+)ValidateCreateUserVerificationCodeRequest
+username (	
+clientVersion (	
+verificationCode (	"£
+%ValidateDeviceVerificationCodeRequest
+username (	
+clientVersion (	
+verificationCode (	
+messageSessionUid (
+encryptedDeviceToken ("Y
+SendSessionMessageRequest
+messageSessionUid (
+command (	
+username (	"M
+GlobalUserAccount
+username (	
+
+accountUid (
+
+regionName (	"7
+AccountUsername
+username (	
+
+dateActive (	"P
+SsoServiceProviderRequest
+name (	
+clientVersion (	
+locale (	"a
+SsoServiceProviderResponse
+name (	
+spUrl (	
+isCloud (
+clientVersion (	"4
+UserSettingRequest
+setting (	
+value (	"f
+ThrottleState*
+type (2.Authentication.ThrottleType
+key (	
+value (	
+state ("µ
+ThrottleState2
+key (	
+keyDescription (	
+value (	
+valueDescription (	
+
+identifier (	
+locked (
+includedInAllClear (
+expireSeconds ("ó
+DeviceInformation
+deviceId (
+
+deviceName (	
+clientVersion (	
+	lastLogin (2
+deviceStatus (2.Authentication.DeviceStatus"*
+UserSetting
+name (	
+value (".
+UserDataKeyRequest
+enterpriseUserId ("+
+UserDataKeyByNodeRequest
+nodeIds ("Ä
+EnterpriseUserIdDataKeyPair
+enterpriseUserId (
+encryptedDataKey (-
+keyType (2.Enterprise.EncryptedKeyType"ï
+UserDataKey
+roleId (
+roleKey (
+
+privateKey (	Q
+enterpriseUserIdDataKeyPairs (2+.Authentication.EnterpriseUserIdDataKeyPair"z
+UserDataKeyResponse1
+userDataKeys (2.Authentication.UserDataKey
+accessDenied (
+noEncryptedDataKey ("H
+)MasterPasswordRecoveryVerificationRequest
+encryptedLoginToken ("U
+GetSecurityQuestionV3Request
+encryptedLoginToken (
+verificationCode (	"r
+GetSecurityQuestionV3Response
+securityQuestion (	
+backupKeyDate (
+salt (
+
+iterations ("n
+GetDataKeyBackupV3Request
+encryptedLoginToken (
+verificationCode (	
+securityAnswerHash ("v
+PasswordRules
+ruleType (	
+match (
+pattern (	
+description (	
+minimum (
+value (	"…
+GetDataKeyBackupV3Response
+dataKeyBackup (
+dataKeyBackupDate (
+	publicKey (
+encryptedPrivateKey (
+	clientKey (
+encryptedSessionToken (4
+passwordRules (2.Authentication.PasswordRules
+passwordRulesIntro (	
+minimumPbkdf2Iterations	 ($
+keyType
+ (2.Enterprise.KeyType")
+GetPublicKeysRequest
+	usernames (	"Ü
+PublicKeyResponse
+username (	
+	publicKey (
+publicEccKey (
+message (	
+	errorCode (	
+
+accountUid ("P
+GetPublicKeysResponse7
+keyResponses (2!.Authentication.PublicKeyResponse"F
+SetEccKeyPairRequest
+	publicKey (
+encryptedPrivateKey ("I
+SetEccKeyPairsRequest0
+teamKeys (2.Authentication.TeamEccKeyPair"R
+SetEccKeyPairsResponse8
+teamKeys (2&.Authentication.TeamEccKeyPairResponse"Q
+TeamEccKeyPair
+teamUid (
+	publicKey (
+encryptedPrivateKey ("X
+TeamEccKeyPairResponse
+teamUid (-
+status (2.Authentication.GenericStatus"D
+GetKsmPublicKeysRequest
+	clientIds (
+controllerUids ("U
+DevicePublicKeyResponse
+clientId (
+	publicKey (
+controllerUid ("Y
+GetKsmPublicKeysResponse=
+keyResponses (2'.Authentication.DevicePublicKeyResponse"X
+AddAppSharesRequest
+appRecordUid (+
+shares (2.Authentication.AppShareAdd">
+RemoveAppSharesRequest
+appRecordUid (
+shares ("á
+AppShareAdd
+	secretUid (7
+	shareType (2$.Authentication.ApplicationShareType
+encryptedSecretKey (
+editable ("â
+AppShare
+	secretUid (7
+	shareType (2$.Authentication.ApplicationShareType
+editable (
+	createdOn (
+data ("Ÿ
+AddAppClientRequest
+appRecordUid (
+encryptedAppKey (
+clientId (
+lockIp (
+firstAccessExpireOn (
+accessExpireOn (
+
+id (	0
+appClientType (2.Enterprise.AppClientType"@
+RemoveAppClientsRequest
+appRecordUid (
+clients ("™
+AddExternalShareRequest
+	recordUid (
+encryptedRecordKey (
+clientId (
+accessExpireOn (
+
+id (	
+isSelfDestruct (
+
+isEditable ("ì
+	AppClient
+
+id (	
+clientId (
+	createdOn (
+firstAccess (
+
+lastAccess (
+	publicKey (
+lockIp (
+	ipAddress (	
+firstAccessExpireOn	 (
+accessExpireOn
+ (0
+appClientType (2.Enterprise.AppClientType
+canEdit (")
+GetAppInfoRequest
+appRecordUid ("é
+AppInfo
+appRecordUid ((
+shares (2.Authentication.AppShare*
+clients (2.Authentication.AppClient
+isExternalShare (">
+GetAppInfoResponse(
+appInfo (2.Authentication.AppInfo"’
+ApplicationSummary
+appRecordUid (
+
+lastAccess (
+recordShares (
+folderShares (
+folderRecords (
+clientCount (
+expiredClientCount (
+username (	
+appData	 ("`
+GetApplicationsSummaryResponse>
+applicationSummary (2".Authentication.ApplicationSummary"/
+GetVerificationTokenRequest
+username (	"B
+GetVerificationTokenResponse"
+encryptedVerificationToken ("'
+SendShareInviteRequest
+email (	"≈
+TimeLimitedAccessRequest
+
+accountUid (
+teamUid (
+	recordUid (
+sharedObjectUid (D
+timeLimitedAccessType (2%.Authentication.TimeLimitedAccessType
+
+expiration ("7
+TimeLimitedAccessStatus
+uid (
+message (	"¯
+TimeLimitedAccessResponse
+revision (A
+userAccessStatus (2'.Authentication.TimeLimitedAccessStatusA
+teamAccessStatus (2'.Authentication.TimeLimitedAccessStatusC
+recordAccessStatus (2'.Authentication.TimeLimitedAccessStatus"+
+RequestDownloadRequest
+	fileNames (	"g
+RequestDownloadResponse
+result (	
+message (	+
+	downloads (2.Authentication.Download"D
+Download
+fileName (	
+url (	
+successStatusCode ("#
+DeleteUserRequest
+reason (	"Ñ
+ChangeMasterPasswordRequest
+authVerifier (
+encryptionParams (
+fromServiceProvider (
+iterationsChange ("=
+ChangeMasterPasswordResponse
+encryptedSessionToken ("Y
+AccountRecoverySetupRequest 
+recoveryEncryptedDataKey (
+recoveryAuthHash ("¨
+!AccountRecoveryVerifyCodeResponse4
+backupKeyType (2.Authentication.BackupKeyType
+backupKeyDate (
+securityQuestion (	
+salt (
+
+iterations (",
+EmergencyAccessLoginRequest
+owner (	"µ
+EmergencyAccessLoginResponse
+sessionToken (%
+dataKey (2.Enterprise.TypedKey+
+rsaPrivateKey (2.Enterprise.TypedKey+
+eccPrivateKey (2.Enterprise.TypedKey"≤
+UserTeamKey
+teamUid (
+username (	
+enterpriseUserId (
+encryptedTeamKeyRSA (
+encryptedTeamKeyEC (-
+status (2.Authentication.GenericStatus")
+GenericRequestResponse
+request ("f
+PasskeyRegistrationRequestH
+authenticatorAttachment (2'.Authentication.AuthenticatorAttachment"P
+PasskeyRegistrationResponse
+challengeToken (
+pkCreationOptions (	"Ñ
+PasskeyRegistrationFinalization
+challengeToken (
+authenticatorResponse (	
+friendlyName (	H àB
+_friendlyName"≥
+PasskeyAuthenticationRequestH
+authenticatorAttachment (2'.Authentication.AuthenticatorAttachment6
+passkeyPurpose (2.Authentication.PasskeyPurpose
+clientVersion (	
+encryptedDeviceToken (
+username (	H à 
+encryptedLoginToken (HàB
+	_usernameB
+_encryptedLoginToken"ã
+PasskeyAuthenticationResponse
+pkRequestOptions (	
+challengeToken ( 
+encryptedLoginToken (H àB
+_encryptedLoginToken"ø
+PasskeyValidationRequest
+challengeToken (
+assertionResponse (6
+passkeyPurpose (2.Authentication.PasskeyPurpose 
+encryptedLoginToken (H àB
+_encryptedLoginToken"I
+PasskeyValidationResponse
+isValid (
+encryptedLoginToken ("h
+UpdatePasskeyRequest
+userId (
+credentialId (
+friendlyName (	H àB
+_friendlyName"-
+PasskeyListRequest
+includeDisabled ("§
+PasskeyInfo
+userId (
+credentialId (
+friendlyName (	
+AAGUID (	
+createdAtMillis (
+lastUsedMillis (
+disabledAtMillis ("G
+PasskeyListResponse0
+passkeyInfo (2.Authentication.PasskeyInfo"C
+TranslationInfo
+translationKey (	
+translationValue (	",
+TranslationRequest
+translationKey (	"O
+TranslationResponse8
+translationInfo (2.Authentication.TranslationInfo"?
+LogoutRequest.
+
+logoutType (2.Authentication.LogoutType*”
+SupportedLanguage
+ENGLISH 
+
+ARABIC
+BRITISH
+CHINESE
+CHINESE_HONG_KONG
+CHINESE_TAIWAN	
+DUTCH
+
+FRENCH
+
+GERMAN	
+GREEK	
+
+HEBREW
+
+ITALIAN
+JAPANESE
+
+KOREAN
+
+POLISH
+
+PORTUGUESE
+PORTUGUESE_BRAZIL
+ROMANIAN
+RUSSIAN
+
+SLOVAK
+SPANISH
+FINNISH
+SWEDISH*k
+	LoginType
+
+NORMAL 
+SSO
+BIO
+	ALTERNATE
+OFFLINE
+FORGOT_PASSWORD
+PASSKEY_BIO*q
+DeviceStatus
+DEVICE_NEEDS_APPROVAL 
+	DEVICE_OK
+DEVICE_DISABLED_BY_USER
+DEVICE_LOCKED_BY_ADMIN*A
+LicenseStatus	
+OTHER 
+
+ACTIVE
+EXPIRED
+DISABLED*7
+AccountType
+CONSUMER 
+
+FAMILY
+
+ENTERPRISE*ü
+SessionTokenType
+NO_RESTRICTION 
+ACCOUNT_RECOVERY
+SHARE_ACCOUNT
+PURCHASE
+RESTRICT
+ACCEPT_INVITE
+SUPPORT_SERVER
+ENTERPRISE_CREATION
+EXPIRED_BUT_ALLOWED_TO_SYNC
+ACCEPT_FAMILY_INVITE	!
+ENTERPRISE_CREATION_PURCHASED
+
+EMERGENCY_ACCESS*G
+Version
+invalid_version 
+default_version
+second_version*7
+MasterPasswordReentryActionType
+
+UNMASK 
+COPY*l
+LoginMethod
+INVALID_LOGINMETHOD 
+EXISTING_ACCOUNT
+
+SSO_DOMAIN
+	AFTER_SSO
+NEW_ACCOUNT*æ
+
+LoginState
+INVALID_LOGINSTATE 
+
+LOGGED_OUT
+DEVICE_APPROVAL_REQUIRED
+DEVICE_LOCKED
+ACCOUNT_LOCKED
+DEVICE_ACCOUNT_LOCKED
+UPGRADE
+LICENSE_EXPIRED
+REGION_REDIRECT
+REDIRECT_CLOUD_SSO	
+REDIRECT_ONSITE_SSO
+
+REQUIRES_2FA
+REQUIRES_AUTH_HASH
+REQUIRES_USERNAME
+AFTER_CLOUD_SSO_LOGIN
+REQUIRES_ACCOUNT_CREATION&
+"REQUIRES_DEVICE_ENCRYPTED_DATA_KEY
+LOGIN_TOKEN_EXPIRED
+PASSKEY_INITIATE_CHALLENGE
+PASSKEY_AUTH_REQUIRED!
+PASSKEY_VERIFY_AUTHENTICATION
+AFTER_PASSKEY_LOGIN
+	LOGGED_INc*k
+EncryptedDataKeyType
+
+NO_KEY 
+BY_DEVICE_PUBLIC_KEY
+BY_PASSWORD
+BY_ALTERNATE
+
+BY_BIO*-
+PasswordMethod
+ENTERED 
+
+BIOMETRICS*π
+TwoFactorPushType
+TWO_FA_PUSH_NONE 
+TWO_FA_PUSH_SMS
+TWO_FA_PUSH_KEEPER
+TWO_FA_PUSH_DUO_PUSH
+TWO_FA_PUSH_DUO_TEXT
+TWO_FA_PUSH_DUO_CALL
+TWO_FA_PUSH_DNA*√
+TwoFactorValueType
+TWO_FA_CODE_NONE 
+TWO_FA_CODE_TOTP
+TWO_FA_CODE_SMS
+TWO_FA_CODE_DUO
+TWO_FA_CODE_RSA
+TWO_FA_RESP_U2F
+TWO_FA_RESP_WEBAUTHN
+TWO_FA_CODE_DNA*·
+TwoFactorChannelType
+TWO_FA_CT_NONE 
+TWO_FA_CT_TOTP
+TWO_FA_CT_SMS
+TWO_FA_CT_DUO
+TWO_FA_CT_RSA
+TWO_FA_CT_BACKUP
+TWO_FA_CT_U2F
+TWO_FA_CT_WEBAUTHN
+TWO_FA_CT_KEEPER
+TWO_FA_CT_DNA	*´
+TwoFactorExpiration
+TWO_FA_EXP_IMMEDIATELY 
+TWO_FA_EXP_5_MINUTES
+TWO_FA_EXP_12_HOURS
+TWO_FA_EXP_24_HOURS
+TWO_FA_EXP_30_DAYS
+TWO_FA_EXP_NEVER*@
+LicenseType	
+VAULT 
+CHAT
+STORAGE
+BREACHWATCH*i
+ObjectTypes
+
+RECORD 
+SHARED_FOLDER_USER
+SHARED_FOLDER_TEAM
+USER_FOLDER
+	TEAM_USER*°
+EncryptedObjectType
+EOT_UNSPECIFIED 
+EOT_RECORD_KEY
+EOT_SHARED_FOLDER_USER_KEY
+EOT_SHARED_FOLDER_TEAM_KEY
+EOT_TEAM_USER_KEY
+EOT_USER_FOLDER_KEY
+EOT_SECURITY_DATA%
+!EOT_SECURITY_DATA_MASTER_PASSWORD
+EOT_EMERGENCY_ACCESS_KEY
+EOT_V2_RECORD_KEY	*M
+MasterPasswordReentryStatus
+
+MP_UNKNOWN 
+
+MP_SUCCESS
+
+MP_FAILURE*`
+AlternateAuthenticationType
+ALTERNATE_MASTER_PASSWORD 
+	BIOMETRIC
+ACCOUNT_RECOVER*ö
+ThrottleType
+PASSWORD_RETRY_THROTTLE "
+PASSWORD_RETRY_LEGACY_THROTTLE
+TWO_FA_THROTTLE
+TWO_FA_LEGACY_THROTTLE
+QA_RETRY_THROTTLE
+ACCOUNT_RECOVER_THROTTLE.
+*VALIDATE_DEVICE_VERIFICATION_CODE_THROTTLE3
+/VALIDATE_CREATE_USER_VERIFICATION_CODE_THROTTLE*H
+Region
+UNKNOWN 
+eu
+us	
+usgov
+au
+jp
+ca*D
+ApplicationShareType
+SHARE_TYPE_RECORD 
+SHARE_TYPE_FOLDER*§
+TimeLimitedAccessType$
+ INVALID_TIME_LIMITED_ACCESS_TYPE 
+USER_ACCESS_TO_RECORD'
+#USER_OR_TEAM_ACCESS_TO_SHAREDFOLDER!
+RECORD_ACCESS_TO_SHAREDFOLDER*<
+BackupKeyType
+BKT_SEC_ANSWER 
+BKT_PASSPHRASE_HASH*r
+GenericStatus
+SUCCESS 
+INVALID_OBJECT
+ALREADY_EXISTS
+ACCESS_DENIED
+LICENSE_SEAT_EXCEEDED*N
+AuthenticatorAttachment
+CROSS_PLATFORM 
+PLATFORM
+ALL_SUPPORTED*-
+PasskeyPurpose
+PK_LOGIN 
+	PK_REAUTH*K
+ClientFormFactor
+FF_EMPTY 
+FF_PHONE
+	FF_TABLET
+FF_WATCH*1
+
+LogoutType
+LOGOUT_USER 
+LOGOUT_TIMEOUTB*
+com.keepersecurity.protoBAuthenticationbproto3
+åB
+SyncDown.protoVaultrecord.protobreachwatch.protoAPIRequest.protoenterprise.protoNotificationCenter.proto	dag.protofolder.protorecord_sharing.proto"P
+SyncDownRequest
+continuationToken (
+dataVersion (
+debug ("≤
+SyncDownResponse
+continuationToken (
+hasMore ('
+cacheStatus (2.Vault.CacheStatus&
+userFolders (2.Vault.UserFolder*
+sharedFolders (2.Vault.SharedFolder>
+userFolderSharedFolders (2.Vault.UserFolderSharedFolder6
+sharedFolderFolders (2.Vault.SharedFolderFolder
+records (2.Vault.Record-
+recordMetaData	 (2.Vault.RecordMetaData+
+nonSharedData
+ (2.Vault.NonSharedData&
+recordLinks (2.Vault.RecordLink2
+userFolderRecords (2.Vault.UserFolderRecord6
+sharedFolderRecords (2.Vault.SharedFolderRecordB
+sharedFolderFolderRecords (2.Vault.SharedFolderFolderRecord2
+sharedFolderUsers (2.Vault.SharedFolderUser2
+sharedFolderTeams (2.Vault.SharedFolderTeam
+recordAddAuditData (
+teams (2.Vault.Team,
+sharingChanges (2.Vault.SharingChange
+profile (2.Vault.Profile%
+
+profilePic (2.Vault.ProfilePic4
+pendingTeamMembers (2.Vault.PendingTeamMember4
+breachWatchRecords (2.Vault.BreachWatchRecord"
+	userAuths (2.Vault.UserAuth?
+breachWatchSecurityData (2.Vault.BreachWatchSecurityData/
+reusedPasswords (2.Vault.ReusedPasswords
+removedUserFolders (
+removedSharedFolders (E
+removedUserFolderSharedFolders (2.Vault.UserFolderSharedFolder=
+removedSharedFolderFolders (2.Vault.SharedFolderFolder
+removedRecords (-
+removedRecordLinks  (2.Vault.RecordLink9
+removedUserFolderRecords! (2.Vault.UserFolderRecord=
+removedSharedFolderRecords" (2.Vault.SharedFolderRecordI
+ removedSharedFolderFolderRecords# (2.Vault.SharedFolderFolderRecord9
+removedSharedFolderUsers$ (2.Vault.SharedFolderUser9
+removedSharedFolderTeams% (2.Vault.SharedFolderTeam
+removedTeams& (&
+ksmAppShares' (2.Vault.KsmChange'
+ksmAppClients( (2.Vault.KsmChange0
+shareInvitations) (2.Vault.ShareInvitation+
+diagnostics* (2.Vault.SyncDiagnostics.
+recordRotations+ (2.Vault.RecordRotation
+users, (2.Vault.User
+removedUsers- (3
+securityScoreData. (2.Vault.SecurityScoreDataA
+notificationSync/ (2'.NotificationCenter.NotificationWrapper/
+keeperDriveData0 (2.Vault.KeeperDriveData"ò
+DriveRecord
+	recordUid (
+revision (
+version (
+shared (
+clientModifiedTime (
+fileSize (
+thumbnailSize ("F
+FolderSharingState
+	folderUid (
+shared (
+count ("õ
+KeeperDriveData#
+folders
+ (2.Folder.FolderData%
+
+folderKeys (2.Folder.FolderKey0
+folderAccesses (2.Folder.FolderAccessData4
+revokedFolderAccesses (2.Folder.RevokedAccess&
+
+recordData (2.Folder.RecordData+
+nonSharedData (2.Vault.NonSharedData0
+recordAccesses (2.Folder.RecordAccessData?
+revokedRecordAccesses (2 .record.v3.sharing.RevokedAccessB
+recordSharingStates (2%.record.v3.sharing.RecordSharingState&
+recordLinks (2.Vault.RecordLink-
+removedRecordLinks  (2.Vault.RecordLink4
+breachWatchRecords( (2.Vault.BreachWatchRecord3
+securityScoreData) (2.Vault.SecurityScoreData?
+breachWatchSecurityData* (2.Vault.BreachWatchSecurityData-
+removedFolders0 (2.Folder.FolderRemoved6
+removedFolderRecords4 (2.Records.FolderRecordKey+
+folderRecords6 (2.Folder.FolderRecord1
+recordRotationData8 (2.Vault.RecordRotation#
+records: (2.Vault.DriveRecord5
+folderSharingState< (2.Vault.FolderSharingState"
+
+rawDagDatae (2.Dag.DebugData"í
+
+UserFolder
+	folderUid (
+	parentUid (
+userFolderKey ('
+keyType (2.Records.RecordKeyType
+revision (
+data ("’
+SharedFolder
+sharedFolderUid (
+revision (
+sharedFolderKey ('
+keyType (2.Records.RecordKeyType
+data (
+defaultManageRecords (
+defaultManageUsers (
+defaultCanEdit (
+defaultCanReshare	 ('
+cacheStatus
+ (2.Vault.CacheStatus
+owner (	
+ownerAccountUid (
+name ("V
+UserFolderSharedFolder
+	folderUid (
+sharedFolderUid (
+revision ("ª
+SharedFolderFolder
+sharedFolderUid (
+	folderUid (
+	parentUid (
+sharedFolderFolderKey ('
+keyType (2.Records.RecordKeyType
+revision (
+data ("l
+SharedFolderKey
+sharedFolderUid (
+sharedFolderKey ('
+keyType (2.Records.RecordKeyType"√
+Team
+teamUid (
+name (	
+teamKey (+
+teamKeyType (2.Records.RecordKeyType
+teamPrivateKey (
+restrictEdit (
+restrictShare (
+restrictView (
+removedSharedFolders	 (0
+sharedFolderKeys
+ (2.Vault.SharedFolderKey
+teamEccPrivateKey (
+teamEccPublicKey ("ø
+Record
+	recordUid (
+revision (
+version (
+shared (
+clientModifiedTime (
+data (
+extra (
+udata (	
+fileSize	 (
+thumbnailSize
+ ("b
+
+RecordLink
+parentRecordUid (
+childRecordUid (
+	recordKey (
+revision ("J
+UserFolderRecord
+	folderUid (
+	recordUid (
+revision ("k
+SharedFolderFolderRecord
+sharedFolderUid (
+	folderUid (
+	recordUid (
+revision ("0
+NonSharedData
+	recordUid (
+data ("ü
+RecordMetaData
+	recordUid (
+owner (
+	recordKey (-
+recordKeyType (2.Records.RecordKeyType
+canShare (
+canEdit (
+ownerAccountUid (
+
+expiration (B
+expirationNotificationType	 (2.Records.TimerNotificationType
+ownerUsername
+ (	"2
+SharingChange
+	recordUid (
+shared (">
+Profile
+data (
+profileName (	
+revision ("+
+
+ProfilePic
+url (	
+revision ("p
+PendingTeamMember
+enterpriseUserId (
+userPublicKey (
+teamUids (
+userEccPublicKey ("¶
+BreachWatchRecord
+	recordUid (
+data (.
+type (2 .BreachWatch.BreachWatchInfoType
+	scannedBy (	
+revision (
+scannedByAccountUid ("¥
+UserAuth
+uid (,
+	loginType (2.Authentication.LoginType
+deleted (
+
+iterations (
+salt (
+encryptedClientKey (
+revision (
+name (	"O
+BreachWatchSecurityData
+	recordUid (
+revision (
+removed ("2
+ReusedPasswords
+count (
+revision ("©
+SharedFolderRecord
+sharedFolderUid (
+	recordUid (
+	recordKey (
+canShare (
+canEdit (
+ownerAccountUid (
+
+expiration (
+owner (B
+expirationNotificationType	 (2.Records.TimerNotificationType
+ownerUsername
+ (	
+rotateOnExpiration ("Ò
+SharedFolderUser
+sharedFolderUid (
+username (	
+manageRecords (
+manageUsers (
+
+accountUid (
+
+expiration (B
+expirationNotificationType (2.Records.TimerNotificationType
+rotateOnExpiration ("Í
+SharedFolderTeam
+sharedFolderUid (
+teamUid (
+name (	
+manageRecords (
+manageUsers (
+
+expiration (B
+expirationNotificationType (2.Records.TimerNotificationType
+rotateOnExpiration ("ä
+	KsmChange
+appRecordUid (
+detailId (
+removed (0
+appClientType (2.Enterprise.AppClientType
+
+expiration ("#
+ShareInvitation
+username (	",
+User
+
+accountUid (
+username (	"{
+SyncDiagnostics
+continuationToken (
+userId (
+enterpriseUserId (
+syncedTo (
+	syncingTo ("Ó
+RecordRotation
+	recordUid (
+revision (
+configurationUid (
+schedule (	
+pwdComplexity (
+disabled (
+resourceUid (
+lastRotation (7
+lastRotationStatus	 (2.Vault.RecordRotationStatus"F
+SecurityScoreData
+	recordUid (
+data (
+revision ("3
+BreachWatchGetSyncDataRequest
+
+recordUids ("≥
+BreachWatchGetSyncDataResponse4
+breachWatchRecords (2.Vault.BreachWatchRecord?
+breachWatchSecurityData (2.Vault.BreachWatchSecurityData
+users (2.Vault.User"6
+GetAccountUidMapResponse
+users (2.Vault.User*"
+CacheStatus
+KEEP 	
+CLEAR*f
+RecordRotationStatus
+RRST_NOT_ROTATED 
+RRST_IN_PROGRESS
+RRST_SUCCESS
+RRST_FAILUREB!
+com.keepersecurity.protoBVaultbproto3
+†(
+AccountSummary.protoAccountSummaryAPIRequest.proto"N
+AccountSummaryRequest
+summaryVersion (
+includeRecentActivity ("Ã
+AccountSummaryElements
+	clientKey (*
+settings (2.AccountSummary.Settings*
+keysInfo (2.AccountSummary.KeysInfo)
+syncLogs (2.AccountSummary.SyncLog
+isEnterpriseAdmin ((
+license (2.AccountSummary.License$
+group (2.AccountSummary.Group2
+Enforcements (2.AccountSummary.Enforcements(
+Images	 (2.AccountSummary.KeyValue0
+personalLicense
+ (2.AccountSummary.License
+fixSharedFolderRecords (
+	usernames (	+
+devices (2.AccountSummary.DeviceInfo
+isShareAdmin (
+accountRecovery (
+accountRecoveryPrompt ('
+minMasterPasswordLengthNoPrompt (
+forbidKeyType2 (
+forbidKeyType1 (
+disallowedFeatures (	"ã
+
+DeviceInfo
+encryptedDeviceToken (
+
+deviceName (	2
+deviceStatus (2.Authentication.DeviceStatus
+devicePublicKey ( 
+encryptedDataKeyDoNotUse (
+clientVersion (	
+username (	
+	ipAddress (	
+approveRequestTime	 (
+encryptedDataKeyPresent
+ (
+groupId (
+devicePlatform (	:
+clientFormFactor (2 .Authentication.ClientFormFactor"¡
+KeysInfo
+encryptionParams (
+encryptedDataKey (
+dataKeyBackupDate (
+userAuthUid (
+encryptedPrivateKey (
+encryptedEccPrivateKey (
+eccPublicKey ("Å
+SyncLog
+countryName (	
+
+secondsAgo (
+
+deviceName (	
+countryCode (	
+	deviceUID (
+	ipAddress (	"˝
+License
+subscriptionCode (	
+productTypeId (
+productTypeName (	
+expirationDate (	
+secondsUntilExpiration (
+
+maxDevices (
+filePlanType (
+	bytesUsed (
+
+bytesTotal	 (%
+secondsUntilStorageExpiration
+ (
+storageExpirationDate (	,
+$hasAutoRenewableAppstoreSubscription (
+accountType (
+uploadsRemaining (
+enterpriseId (
+chatEnabled ( 
+auditAndReportingEnabled (!
+breachWatchFeatureDisable (
+
+accountUid (
+allowPersonalLicense (
+
+licensedBy (	
+email (	
+breachWatchEnabled (
+breachWatchScanned (
+breachWatchExpiration (
+breachWatchDateCreated (%
+error (2.AccountSummary.Result
+
+expiration (
+storageExpiration (
+uploadsCount (
+units  (
+pendingEnterprise! (
+isPamEnabled" (
+isKsmEnabled# ("£
+AddOn
+licenseKeyId (
+name (	
+expirationDate (
+createdDate (
+isTrial (
+enabled (
+scanned (
+featureDisable ("ï
+
+Settings
+audit (!
+mustPerformAccountShareBy (>
+shareAccountTo (2&.AccountSummary.MissingAccountShareKey+
+rules (2.AccountSummary.PasswordRule
+passwordRulesIntro (	
+autoBackupDays (
+theme (	
+channel (	
+channelValue	 (	
+rsaConfigured
+ (
+emailVerified ("
+masterPasswordLastModified (
+accountFolderKey (1
+securityKeys (2.AccountSummary.SecurityKey+
+	keyValues (2.AccountSummary.KeyValue
+ssoUser (
+onlineAccessOnly (
+masterPasswordExpiry (
+twoFactorRequired (
+disallowExport (
+restrictFiles (
+restrictAllSharing (
+restrictSharing ("
+restrictSharingIncomingAll ()
+!restrictSharingIncomingEnterprise (
+logoutTimer (
+persistentLogin (
+ipDisableAutoApprove ($
+shareDataKeyWithEccPublicKey ('
+shareDataKeyWithDevicePublicKey (
+RecordTypesCounter ($
+RecordTypesEnterpriseCounter  (
+recordTypesEnabled! (
+canManageRecordTypes" (
+recordTypesPAMCounter# (
+logoutTimerMinutes$ ( 
+securityKeysNoUserVerify% (6
+channels& (2$.Authentication.TwoFactorChannelType
+personalUsernames' (	
+maxIpDistance( (
+maxIpDistanceEffective) (
+offlineAccessExpireDays* ("&
+KeyValue
+key (	
+value (	"-
+KeyValueBoolean
+key (	
+value ("*
+KeyValueLong
+key (	
+value ("=
+Result
+
+resultCode (	
+message (	
+result (	"¬
+Enforcements)
+strings (2.AccountSummary.KeyValue1
+booleans (2.AccountSummary.KeyValueBoolean+
+longs (2.AccountSummary.KeyValueLong'
+jsons (2.AccountSummary.KeyValue"<
+MissingAccountShareKey
+role_id (
+	publicKey ("u
+PasswordRule
+ruleType (	
+pattern (	
+match (
+minimum (
+description (	
+value (	"ó
+SecurityKey
+deviceId (
+
+deviceName (	
+	dateAdded (
+isValid (>
+deviceRegistration (2".AccountSummary.DeviceRegistration"y
+DeviceRegistration
+	keyHandle (	
+	publicKey (
+attestationCert (	
+counter (
+compromised ("k
+Group
+admin (
+groupVerificationCode (	4
+administrator (2.AccountSummary.Administrator"¿
+Administrator
+	firstName (	
+lastName (	
+email (	
+currentNumberOfUsers (
+numberOfUsers (
+subscriptionCode (	
+expirationDate (	
+purchaseDate	 (	B*
+com.keepersecurity.protoBAccountSummarybproto3
+¬ª
+enterprise.proto
+Enterprisefolder.proto"Ñ
+EnterpriseKeyPairRequest
+enterprisePublicKey (%
+encryptedEnterprisePrivateKey ($
+keyType (2.Enterprise.KeyType"'
+GetTeamMemberRequest
+teamUid ("}
+EnterpriseUser
+enterpriseUserId (
+email (	
+enterpriseUsername (	
+isShareAdmin (
+username (	"K
+GetTeamMemberResponse2
+enterpriseUser (2.Enterprise.EnterpriseUser"-
+EnterpriseUserIds
+enterpriseUserId ("B
+EnterprisePersonalAccount
+email (	
+OBSOLETE_FIELD ("S
+EncryptedTeamKeyRequest
+teamUid (
+encryptedTeamKey (
+force ("+
+ReEncryptedData
+
+id (
+data (	"?
+ReEncryptedRoleKey
+role_id (
+encryptedRoleKey ("P
+ReEncryptedUserDataKey
+enterpriseUserId (
+userEncryptedDataKey ("ÿ
+NodeToManagedCompanyRequest
+	companyId (*
+nodes (2.Enterprise.ReEncryptedData*
+roles (2.Enterprise.ReEncryptedData*
+users (2.Enterprise.ReEncryptedData0
+roleKeys (2.Enterprise.ReEncryptedRoleKey5
+teamKeys (2#.Enterprise.EncryptedTeamKeyRequest9
+usersDataKeys (2".Enterprise.ReEncryptedUserDataKey",
+RoleTeam
+role_id (
+teamUid ("4
+	RoleTeams'
+	role_team (2.Enterprise.RoleTeam"/
+TeamsByRole
+role_id (
+teamUid ("<
+ManagedNodesByRole
+role_id (
+managedNodeId ("Ç
+RoleUserAddKeys
+enterpriseUserId (
+treeKey (	B
+roleAdminKey (	*
+typedTreeKey (2.Enterprise.TypedKey"T
+RoleUserAdd
+role_id (4
+roleUserAddKeys (2.Enterprise.RoleUserAddKeys"D
+RoleUsersAddRequest-
+roleUserAdds (2.Enterprise.RoleUserAdd"Ä
+RoleUserAddResult
+roleId (
+enterpriseUserId (0
+status (2 .Enterprise.RoleUserModifyStatus
+message (	"F
+RoleUsersAddResponse.
+results (2.Enterprise.RoleUserAddResult"<
+RoleUserRemove
+role_id (
+enterpriseUserIds ("M
+RoleUsersRemoveRequest3
+roleUserRemoves (2.Enterprise.RoleUserRemove"É
+RoleUserRemoveResult
+roleId (
+enterpriseUserId (0
+status (2 .Enterprise.RoleUserModifyStatus
+message (	"L
+RoleUsersRemoveResponse1
+results (2 .Enterprise.RoleUserRemoveResult"†
+EnterpriseRegistration
+encryptedTreeKey (
+enterpriseName (	
+rootNodeData (
+adminUserData (
+	adminName (	
+roleData (8
+
+rsaKeyPair (2$.Enterprise.EnterpriseKeyPairRequest
+numberSeats (2
+enterpriseType	 (2.Enterprise.EnterpriseType
+rolePublicKey
+ (*
+"rolePrivateKeyEncryptedWithRoleKey (#
+roleKeyEncryptedWithTreeKey (8
+
+eccKeyPair (2$.Enterprise.EnterpriseKeyPairRequest
+allUsersRoleData ()
+!roleKeyEncryptedWithUserPublicKey (
+approverRoleData ("H
+DomainPasswordRulesRequest
+username (	
+verificationCode (	"\
+DomainPasswordRulesFields
+type (	
+minimum (
+maximum (
+allowed ("E
+LoginToMcRequest
+mcEnterpriseId (
+messageSessionUid ("w
+LoginToMcResponse
+encryptedSessionToken (
+encryptedTreeKey (	
+	keyTypeId (
+forbidKeyType2 ("g
+DomainPasswordRulesResponseH
+domainPasswordRulesFields (2%.Enterprise.DomainPasswordRulesFields"à
+ApproveUserDeviceRequest
+enterpriseUserId (
+encryptedDeviceToken (
+encryptedDeviceDataKey (
+denyApproval ("t
+ApproveUserDeviceResponse
+enterpriseUserId (
+encryptedDeviceToken (
+failed (
+message (	"Y
+ApproveUserDevicesRequest<
+deviceRequests (2$.Enterprise.ApproveUserDeviceRequest"\
+ApproveUserDevicesResponse>
+deviceResponses (2%.Enterprise.ApproveUserDeviceResponse"á
+EnterpriseUserDataKey
+enterpriseUserId (
+userEncryptedDataKey (
+	keyTypeId (
+roleKey (
+
+privateKey ("I
+EnterpriseUserDataKeys/
+keys (2!.Enterprise.EnterpriseUserDataKey"g
+EnterpriseUserDataKeyLight
+enterpriseUserId (
+userEncryptedDataKey (
+	keyTypeId ("d
+EnterpriseUserDataKeysByNode
+nodeId (4
+keys (2&.Enterprise.EnterpriseUserDataKeyLight"^
+$EnterpriseUserDataKeysByNodeResponse6
+keys (2(.Enterprise.EnterpriseUserDataKeysByNode"2
+EnterpriseDataRequest
+continuationToken ("0
+SpecialProvisioning
+url (	
+name (	"Ñ
+GeneralDataEntity
+enterpriseName (	
+restrictVisibility (<
+specialProvisioning (2.Enterprise.SpecialProvisioning0
+userPrivilege (2.Enterprise.UserPrivilege
+distributor (
+forbidAccountTransfer	 (
+showUserOnboard
+ ("˝
+Node
+nodeId (
+parentId (
+bridgeId (
+scimId (
+	licenseId (
+encryptedData (	
+
+duoEnabled (
+
+rsaEnabled ( 
+ssoServiceProviderId	 (B
+restrictVisibility
+ (!
+ssoServiceProviderIds (B"é
+Role
+roleId (
+nodeId (
+encryptedData (	
+keyType (	
+visibleBelow (
+newUserInherit (
+roleType (	"∏
+User
+enterpriseUserId (
+nodeId (
+encryptedData (	
+keyType (	
+username (	
+status (	
+lock (
+userId (
+accountShareExpiration	 (
+fullName
+ (	
+jobTitle (	
+
+tfaEnabled (F
+transferAcceptanceStatus (2$.Enterprise.TransferAcceptanceStatus"7
+	UserAlias
+enterpriseUserId (
+username (	"¨
+ComplianceReportMetaData
+	reportUid (
+nodeId (
+
+reportName (	
+dateGenerated (
+	runByName (	
+numberOfOwners (
+numberOfRecords ("S
+ManagedNode
+roleId (
+managedNodeId (
+cascadeNodeManagement ("T
+UserManagedNode
+nodeId (
+cascadeNodeManagement (
+
+privileges (	"w
+UserPrivilege5
+userManagedNodes (2.Enterprise.UserManagedNode
+enterpriseUserId (
+encryptedData (	"4
+RoleUser
+roleId (
+enterpriseUserId ("M
+RolePrivilege
+managedNodeId (
+roleId (
+privilegeType (	"T
+PrivilegesByManagedNode
+managedNodeId (
+roleId (
+
+privileges (	"I
+RoleEnforcement
+roleId (
+enforcementType (	
+value (	"©
+Team
+teamUid (
+name (	
+nodeId (
+restrictEdit (
+restrictShare (
+restrictView (
+encryptedData (	
+encryptedTeamKey (	"G
+TeamUser
+teamUid (
+enterpriseUserId (
+userType (	"K
+GetDistributorInfoResponse-
+distributors (2.Enterprise.Distributor"B
+Distributor
+name (	%
+mspInfos (2.Enterprise.MspInfo"ù
+MspInfo
+enterpriseId (
+enterpriseName (	
+allocatedLicenses (
+allowedMcProducts (	
+allowedAddOns (	
+maxFilePlanType (	4
+managedCompanies (2.Enterprise.ManagedCompany
+allowUnlimitedLicenses ((
+addOns	 (2.Enterprise.LicenseAddOn"®
+ManagedCompany
+mcEnterpriseId (
+mcEnterpriseName (	
+	mspNodeId (
+numberOfSeats (
+numberOfUsers (
+	productId (	
+	isExpired (
+treeKey (	
+tree_key_role	 (
+filePlanType
+ (	(
+addOns (2.Enterprise.LicenseAddOn
+treeKeyTypeId ("R
+MSPPool
+	productId (	
+seats (
+availableSeats (
+stash (":
+
+MSPContact
+enterpriseId (
+enterpriseName (	"Ñ
+LicenseAddOn
+name (	
+enabled (
+isTrial (
+
+expiration (
+created (
+seats (
+activationTime (
+includedInProduct (
+apiCallCount	 (
+tierDescription
+ (	
+seatsAllocated (
+nhiTierAddOnId ("s
+	MCDefault
+	mcProduct (	
+addOns (	
+filePlanType (	
+maxLicenses (
+fixedMaxLicenses ("“
+
+MSPPermits
+
+restricted (
+maxAllowedLicenses (
+allowedMcProducts (	
+allowedAddOns (	
+maxFilePlanType (	
+allowUnlimitedLicenses ()
+
+mcDefaults (2.Enterprise.MCDefault"†
+License
+paid (
+numberOfSeats (
+
+expiration (
+licenseKeyId (
+productTypeId (
+name (	
+enterpriseLicenseId (
+seatsAllocated (
+seatsPending	 (
+tier
+ (
+filePlanTypeId (
+maxBytes (
+storageExpiration (
+licenseStatus (	$
+mspPool (2.Enterprise.MSPPool)
+	managedBy (2.Enterprise.MSPContact(
+addOns (2.Enterprise.LicenseAddOn
+nextBillingDate (
+hasMSPLegacyLog (*
+
+mspPermits (2.Enterprise.MSPPermits
+distributor ("n
+Bridge
+bridgeId (
+nodeId (
+wanIpEnforcement (	
+lanIpEnforcement (	
+status (	"t
+Scim
+scimId (
+nodeId (
+status (	
+
+lastSynced (
+
+rolePrefix (	
+uniqueGroups ("L
+EmailProvision
+
+id (
+nodeId (
+domain (	
+method (	"R
+
+QueuedTeam
+teamUid (
+name (	
+nodeId (
+encryptedData (	"0
+QueuedTeamUser
+teamUid (
+users ("§
+TeamsAddResult4
+successfulTeamAdd (2.Enterprise.TeamAddResult6
+unsuccessfulTeamAdd (2.Enterprise.TeamAddResult
+result (	
+errorMessage (	"U
+TeamAddResult
+team (2.Enterprise.Team
+result (	
+errorMessage (	"ë
+
+SsoService
+ssoServiceProviderId (
+nodeId (
+name (	
+sp_url (	
+inviteNewUsers (
+active (
+isCloud ("1
+ReportFilterUser
+userId (
+email (	"ó
+DeviceRequestForAdminApproval
+deviceId (
+enterpriseUserId (
+encryptedDeviceToken (
+devicePublicKey (
+
+deviceName (	
+clientVersion (	
+
+deviceType (	
+date (
+	ipAddress	 (	
+location
+ (	
+email (	
+
+accountUid ("`
+EnterpriseData0
+entity (2 .Enterprise.EnterpriseDataEntity
+delete (
+data ("–
+EnterpriseDataResponse
+continuationToken (
+hasMore (,
+cacheStatus (2.Enterprise.CacheStatus(
+data (2.Enterprise.EnterpriseData2
+generalData (2.Enterprise.GeneralDataEntity"*
+BackupRequest
+continuationToken ("ò
+BackupRecord
+userId (
+	recordUid (
+key (*
+keyType (2.Enterprise.BackupKeyType
+version (
+data (
+extra (".
+	BackupKey
+userId (
+	backupKey ("ç
+
+BackupUser
+userId (
+userName (	
+dataKey (6
+dataKeyType (2!.Enterprise.BackupUserDataKeyType
+
+privateKey (
+treeKey (.
+treeKeyType (2.Enterprise.BackupKeyType)
+
+backupKeys (2.Enterprise.BackupKey
+privateECKey	 ("û
+BackupResponse
+enterpriseEccPrivateKey (%
+users (2.Enterprise.BackupUser)
+records (2.Enterprise.BackupRecord
+continuationToken ("e
+
+BackupFile
+user (	
+	backupUid (
+fileName (	
+created (
+downloadUrl (	"8
+BackupsResponse%
+files (2.Enterprise.BackupFile".
+GetEnterpriseDataKeysRequest
+roleId ("ˇ
+GetEnterpriseDataKeysResponse:
+reEncryptedRoleKey (2.Enterprise.ReEncryptedRoleKey$
+roleKey (2.Enterprise.RoleKey"
+mspKey (2.Enterprise.MspKey2
+enterpriseKeys (2.Enterprise.EnterpriseKeys$
+treeKey (2.Enterprise.TreeKey"^
+RoleKey
+roleId (
+encryptedKey (	-
+keyType (2.Enterprise.EncryptedKeyType"d
+MspKey
+encryptedMspTreeKey (	=
+encryptedMspTreeKeyType (2.Enterprise.EncryptedKeyType"|
+EnterpriseKeys
+rsaPublicKey (
+rsaEncryptedPrivateKey (
+eccPublicKey (
+eccEncryptedPrivateKey ("H
+TreeKey
+treeKey (	,
+	keyTypeId (2.Enterprise.BackupKeyType"E
+SharedRecordResponse-
+events (2.Enterprise.SharedRecordEvent"p
+SharedRecordEvent
+	recordUid (
+userName (	
+canEdit (
+
+canReshare (
+	shareFrom (".
+SetRestrictVisibilityRequest
+nodeId ("–
+UserAddRequest
+enterpriseUserId (
+nodeId (
+encryptedData (-
+keyType (2.Enterprise.EncryptedKeyType
+fullName (	
+jobTitle (	
+email (	
+suppressEmailInvite (":
+UserUpdateRequest%
+users (2.Enterprise.UserUpdate"Á
+
+UserUpdate
+enterpriseUserId (
+nodeId (
+encryptedData (B-
+keyType (2.Enterprise.EncryptedKeyType
+fullName (	
+jobTitle (	
+email (	
+inviteeLocale (	
+encryptedDataString	 (	"A
+UserUpdateResponse+
+users (2.Enterprise.UserUpdateResult"à
+UserUpdateResult
+enterpriseUserId (,
+status (2.Enterprise.UserUpdateStatus
+errorMessage (	
+additionalInfo (	"J
+ComplianceRecordOwnersRequest
+nodeIds (
+includeNonShared ("O
+ComplianceRecordOwnersResponse-
+recordOwners (2.Enterprise.RecordOwner"7
+RecordOwner
+enterpriseUserId (
+shared ("¶
+ PreliminaryComplianceDataRequest
+enterpriseUserIds (
+includeNonShared (
+continuationToken (2
+*includeTotalMatchingRecordsInFirstResponse ("ü
+!PreliminaryComplianceDataResponse0
+auditUserData (2.Enterprise.AuditUserData
+continuationToken (
+hasMore (
+totalMatchingRecords ("b
+AuditUserRecord
+	recordUid (
+encryptedData (
+shared (
+isDriveRecord ("ç
+AuditUserData
+enterpriseUserId (5
+auditUserRecords (2.Enterprise.AuditUserRecord+
+status (2.Enterprise.AuditUserStatus"
+ComplianceReportFilters
+recordTitles (	
+
+recordUids (
+	jobTitles (
+urls (	
+enterpriseUserIds ("
+ComplianceReportRequest<
+complianceReportRun (2.Enterprise.ComplianceReportRun
+
+reportName (	
+
+saveReport ("Ö
+ComplianceReportRunN
+reportCriteriaAndFilter (2-.Enterprise.ComplianceReportCriteriaAndFilter
+users (
+records ("¸
+!ComplianceReportCriteriaAndFilter
+nodeId (
+criteriaUid (
+criteriaName (	6
+criteria (2$.Enterprise.ComplianceReportCriteria3
+filters (2".Enterprise.ComplianceReportFilter
+lastModified (
+nodeEncryptedData ("b
+ComplianceReportCriteria
+	jobTitles (	
+enterpriseUserIds (
+includeNonShared ("x
+ComplianceReportFilter
+recordTitles (	
+
+recordUids (
+	jobTitles (	
+urls (	
+recordTypes (	"°
+ComplianceReportResponse
+dateGenerated (
+runByUserName (	
+
+reportName (	
+	reportUid (<
+complianceReportRun (2.Enterprise.ComplianceReportRun-
+userProfiles (2.Enterprise.UserProfile)
+
+auditTeams (2.Enterprise.AuditTeam-
+auditRecords (2.Enterprise.AuditRecord+
+userRecords	 (2.Enterprise.UserRecord;
+sharedFolderRecords
+ (2.Enterprise.SharedFolderRecord7
+sharedFolderUsers (2.Enterprise.SharedFolderUser7
+sharedFolderTeams (2.Enterprise.SharedFolderTeam1
+auditTeamUsers (2.Enterprise.AuditTeamUser)
+
+auditRoles (2.Enterprise.AuditRole/
+linkedRecords (2.Enterprise.LinkedRecord"ò
+AuditRecord
+	recordUid (
+	auditData (
+hasAttachments (
+inTrash (
+treeLeft (
+	treeRight (
+isDriveRecord ("Ä
+	AuditRole
+roleId (
+encryptedData (&
+restrictShareOutsideEnterprise (
+restrictShareAll ("
+restrictShareOfAttachments ()
+!restrictMaskPasswordsWhileEditing (;
+roleNodeManagements (2.Enterprise.RoleNodeManagement"^
+RoleNodeManagement
+treeLeft (
+	treeRight (
+cascade (
+
+privileges ("k
+UserProfile
+enterpriseUserId (
+fullName (	
+jobTitle (	
+email (	
+roleIds ("{
+RecordPermission
+	recordUid (
+permissionBits (H ,
+drive (2.Enterprise.DrivePermissionH B
+
+permission"«
+DrivePermission
+owner (
+denied (
+canEdit (
+canShare (
+isShareAdmin (&
+
+accessType (2.Folder.AccessType4
+folderPermissions (2.Folder.FolderPermissions"_
+
+UserRecord
+enterpriseUserId (7
+recordPermissions (2.Enterprise.RecordPermission"[
+	AuditTeam
+teamUid (
+teamName (	
+restrictEdit (
+restrictShare (";
+AuditTeamUser
+teamUid (
+enterpriseUserIds ("ü
+SharedFolderRecord
+sharedFolderUid (7
+recordPermissions (2.Enterprise.RecordPermission7
+shareAdminRecords (2.Enterprise.ShareAdminRecord"M
+ShareAdminRecord
+enterpriseUserId (
+recordPermissionIndexes ("F
+SharedFolderUser
+sharedFolderUid (
+enterpriseUserIds ("=
+SharedFolderTeam
+sharedFolderUid (
+teamUids ("/
+GetComplianceReportRequest
+	reportUid ("2
+GetComplianceReportResponse
+downloadUrl (	"6
+ComplianceReportCriteriaRequest
+criteriaUid (";
+$SaveComplianceReportCriteriaResponse
+criteriaUid ("4
+LinkedRecord
+ownerUid (
+
+recordUids ("W
+GetSharingAdminsRequest
+sharedFolderUid (
+	recordUid (
+username (	"‡
+UserProfileExt
+email (	
+fullName (	
+jobTitle (	
+isMSPMCAdmin (
+isInSharedFolder (&
+isShareAdminForRequestedObject ((
+ isShareAdminForSharedFolderOwner (
+hasAccessToObject ("O
+GetSharingAdminsResponse3
+userProfileExts (2.Enterprise.UserProfileExt"_
+TeamsEnterpriseUsersAddRequest=
+teams (2..Enterprise.TeamsEnterpriseUsersAddTeamRequest"t
+"TeamsEnterpriseUsersAddTeamRequest
+teamUid (=
+users (2..Enterprise.TeamsEnterpriseUsersAddUserRequest"´
+"TeamsEnterpriseUsersAddUserRequest
+enterpriseUserId (*
+userType (2.Enterprise.TeamUserType
+teamKey (	B*
+typedTeamKey (2.Enterprise.TypedKey"F
+TypedKey
+key (-
+keyType (2.Enterprise.EncryptedKeyType"s
+TeamsEnterpriseUsersAddResponse>
+teams (2/.Enterprise.TeamsEnterpriseUsersAddTeamResponse
+revision ("ƒ
+#TeamsEnterpriseUsersAddTeamResponse
+teamUid (>
+users (2/.Enterprise.TeamsEnterpriseUsersAddUserResponse
+success (
+message (	
+
+resultCode (	
+additionalInfo (	"ü
+#TeamsEnterpriseUsersAddUserResponse
+enterpriseUserId (
+revision (
+success (
+message (	
+
+resultCode (	
+additionalInfo (	"E
+TeamEnterpriseUserRemove
+teamUid (
+enterpriseUserId ("j
+ TeamEnterpriseUserRemovesRequestF
+teamEnterpriseUserRemove (2$.Enterprise.TeamEnterpriseUserRemove"{
+!TeamEnterpriseUserRemovesResponseV
+ teamEnterpriseUserRemoveResponse (2,.Enterprise.TeamEnterpriseUserRemoveResponse"∏
+ TeamEnterpriseUserRemoveResponseF
+teamEnterpriseUserRemove (2$.Enterprise.TeamEnterpriseUserRemove
+success (
+
+resultCode (	
+message (	
+additionalInfo (	"M
+DomainAlias
+domain (	
+alias (	
+status (
+message (	"B
+DomainAliasRequest,
+domainAlias (2.Enterprise.DomainAlias"C
+DomainAliasResponse,
+domainAlias (2.Enterprise.DomainAlias"m
+EnterpriseUsersProvisionRequest3
+users (2$.Enterprise.EnterpriseUsersProvision
+clientVersion (	"∂
+EnterpriseUsersProvision
+enterpriseUserId (
+username (	
+nodeId (
+encryptedData (	-
+keyType (2.Enterprise.EncryptedKeyType
+fullName (	
+jobTitle (	
+enterpriseUsersDataKey (
+authVerifier	 (
+encryptionParams
+ (
+rsaPublicKey (
+rsaEncryptedPrivateKey (
+eccPublicKey (
+eccEncryptedPrivateKey (
+encryptedDeviceToken (
+encryptedClientKey ("_
+ EnterpriseUsersProvisionResponse;
+results (2*.Enterprise.EnterpriseUsersProvisionResult"q
+EnterpriseUsersProvisionResult
+enterpriseUserId (
+code (	
+message (	
+additionalInfo (	"a
+EnterpriseUsersAddRequest-
+users (2.Enterprise.EnterpriseUsersAdd
+clientVersion (	"å
+EnterpriseUsersAdd
+enterpriseUserId (
+username (	
+nodeId (
+encryptedData (	-
+keyType (2.Enterprise.EncryptedKeyType
+fullName (	
+jobTitle (	
+suppressEmailInvite (
+inviteeLocale	 (	
+move
+ (
+roleId ("õ
+EnterpriseUsersAddResponse5
+results (2$.Enterprise.EnterpriseUsersAddResult
+success (
+code (	
+message (	
+additionalInfo (	"ñ
+EnterpriseUsersAddResult
+enterpriseUserId (
+success (
+verificationCode (	
+code (	
+message (	
+additionalInfo (	"π
+UpdateMSPPermitsRequest
+mspEnterpriseId (
+maxAllowedLicenses (
+allowedMcProducts (	
+allowedAddOns (	
+maxFilePlanType (	
+allowUnlimitedLicenses ("9
+DeleteEnterpriseUsersRequest
+enterpriseUserIds ("o
+DeleteEnterpriseUserStatus
+enterpriseUserId (7
+status (2'.Enterprise.DeleteEnterpriseUsersResult"]
+DeleteEnterpriseUsersResponse<
+deleteStatus (2&.Enterprise.DeleteEnterpriseUserStatus"w
+ClearSecurityDataRequest
+enterpriseUserId (
+allUsers (/
+type (2!.Enterprise.ClearSecurityDataType"%
+ListDomainsResponse
+domain (	"d
+ReserveDomainRequest<
+reserveDomainAction (2.Enterprise.ReserveDomainAction
+domain (	"&
+ReserveDomainResponse
+token (	".
+RolesByTeam
+teamUid (
+roleId ("ç
+LockUsersRequest
+lockEnterpriseUserIds ( 
+disableEnterpriseUserIds (
+unlockEnterpriseUserIds (
+deleteIfPending ("C
+LockUsersResponse.
+response (2.Enterprise.LockUserResponse"n
+LockUserResponse
+enterpriseUserId (*
+status (2.Enterprise.UserLockStatus
+errorMessage (	*
+KeyType
+RSA 
+ECC*Ø
+RoleUserModifyStatus
+ROLE_EXISTS 
+MISSING_TREE_KEY
+MISSING_ROLE_KEY
+INVALID_ENTERPRISE_USER_ID
+PENDING_ENTERPRISE_USER
+INVALID_NODE_ID!
+MAY_NOT_REMOVE_SELF_FROM_ROLE
+MUST_HAVE_ONE_USER_ADMIN
+INVALID_ROLE_ID
+PAM_LICENSE_SEAT_EXCEEDED	
+WOULD_LOCK_SELF
+*=
+EnterpriseType
+ENTERPRISE_STANDARD 
+ENTERPRISE_MSP*s
+TransferAcceptanceStatus
+	UNDEFINED 
+NOT_REQUIRED
+NOT_ACCEPTED
+PARTIALLY_ACCEPTED
+ACCEPTED*·
+EnterpriseDataEntity
+UNKNOWN 	
+NODES	
+ROLES	
+USERS	
+TEAMS
+
+TEAM_USERS
+
+ROLE_USERS
+ROLE_PRIVILEGES
+ROLE_ENFORCEMENTS
+
+ROLE_TEAMS	
+LICENSES
+
+MANAGED_NODES
+MANAGED_COMPANIES
+BRIDGES	
+SCIMS
+EMAIL_PROVISION
+QUEUED_TEAMS
+QUEUED_TEAM_USERS
+SSO_SERVICES
+REPORT_FILTER_USERS&
+"DEVICES_REQUEST_FOR_ADMIN_APPROVAL
+USER_ALIASES)
+%COMPLIANCE_REPORT_CRITERIA_AND_FILTER
+COMPLIANCE_REPORTS*"
+CacheStatus
+KEEP 	
+CLEAR*ì
+BackupKeyType
+
+NO_KEY 
+ENCRYPTED_BY_DATA_KEY
+ENCRYPTED_BY_PUBLIC_KEY
+ENCRYPTED_BY_DATA_KEY_GCM
+ENCRYPTED_BY_PUBLIC_KEY_ECC*:
+BackupUserDataKeyType
+OWN 
+SHARED_TO_ENTERPRISE*•
+EncryptedKeyType
+	KT_NO_KEY 
+KT_ENCRYPTED_BY_DATA_KEY
+KT_ENCRYPTED_BY_PUBLIC_KEY 
+KT_ENCRYPTED_BY_DATA_KEY_GCM"
+KT_ENCRYPTED_BY_PUBLIC_KEY_ECC*∑
+EnterpriseFlagType
+INVALID 
+ALLOW_PERSONAL_LICENSE
+SPECIAL_PROVISIONING
+RECORD_TYPES
+SECRETS_MANAGER
+ENTERPRISE_LOCKED
+FORBID_KEY_TYPE_2
+CONSOLE_ONBOARDED
+FORBID_ACCOUNT_TRANSFER
+NPS_POPUP_OPT_OUT	
+SHOW_USER_ONBOARD
+
+FORBID_KEY_TYPE_1
+KEEPER_DRIVE*Û
+UserUpdateStatus
+USER_UPDATE_OK 
+USER_UPDATE_ACCESS_DENIED&
+"USER_UPDATE_EXCEEDED_LICENSE_SEATS
+USER_UPDATE_BAD_REQUEST
+USER_UPDATE_DUPLICATE
+USER_UPDATE_INVALID_STATE
+USER_UPDATE_FAILED
+USER_UPDATE_ERROR*I
+AuditUserStatus
+OK 
+ACCESS_DENIED
+NO_LONGER_IN_ENTERPRISE*3
+TeamUserType
+USER 	
+ADMIN
+
+ADMIN_ONLY*x
+AppClientType
+NOT_USED 
+GENERAL%
+!DISCOVERY_AND_ROTATION_CONTROLLER
+KCM_CONTROLLER
+SELF_DESTRUCT*è
+DeleteEnterpriseUsersResult
+SUCCESS 
+NOT_AN_ENTERPRISE_USER
+CANNOT_DELETE_SELF$
+ BRIDGE_CANNOT_DELETE_ACTIVE_USER	
+ERROR*á
+ClearSecurityDataType
+RECALCULATE_SUMMARY_REPORT '
+#FORCE_CLIENT_CHECK_FOR_MISSING_DATA%
+!FORCE_CLIENT_RESEND_SECURITY_DATA*J
+ReserveDomainAction
+DOMAIN_TOKEN 
+
+DOMAIN_ADD
+DOMAIN_DELETE*s
+UserLockStatus
+UNKNOWN_LOCK_STATUS 
+
+LOCKED
+DISABLED
+UNLOCKED
+DELETED
+CANT_BE_PENDING*Ä
+ExternalCloudSecretsStoreType
+UNKNOWN_STORE_TYPE 
+AWS_SECRETS_MANAGER
+AZURE_KEY_VAULT
+GOOGLE_SECRET_MANAGERB&
+com.keepersecurity.protoB
+Enterprisebproto3
+ΩW
+record.protoRecords"\
+
+RecordType
+recordTypeId (
+content (	'
+scope (2.Records.RecordTypeScope"U
+RecordTypesRequest
+standard (
+user (
+
+enterprise (
+pam ("ú
+RecordTypesResponse(
+recordTypes (2.Records.RecordType
+standardCounter (
+userCounter (
+enterpriseCounter (
+
+pamCounter ("A
+RecordTypeModifyResponse
+recordTypeId (
+counter ("=
+RecordsGetRequest
+record_uids (
+client_time ("—
+Record
+
+record_uid (
+
+record_key (/
+record_key_type (2.Records.RecordKeyType
+data (
+extra (
+version (
+client_modified_time (
+revision (
+file_ids	 ("~
+FolderRecordKey
+
+folder_uid (
+
+record_uid (
+
+record_key (/
+record_key_type (2.Records.RecordKeyType"a
+Folder
+
+folder_uid (
+
+folder_key (/
+folder_key_type (2.Records.RecordKeyType"ï
+Team
+team_uid (
+team_key (
+team_private_key (-
+team_key_type (2.Records.RecordKeyType 
+folders (2.Records.Folder"¨
+RecordsGetResponse 
+records (2.Records.Record4
+folder_record_keys (2.Records.FolderRecordKey 
+folders (2.Records.Folder
+teams (2.Records.Team"4
+
+RecordLink
+
+record_uid (
+
+record_key (",
+RecordAudit
+version (
+data ("
+SecurityData
+data ("!
+SecurityScoreData
+data ("Ñ
+	RecordAdd
+
+record_uid (
+
+record_key (
+client_modified_time (
+data (
+non_shared_data (.
+folder_type (2.Records.RecordFolderType
+
+folder_uid (
+
+folder_key ()
+record_links	 (2.Records.RecordLink#
+audit
+ (2.Records.RecordAudit+
+securityData (2.Records.SecurityData5
+securityScoreData (2.Records.SecurityScoreData"Ö
+RecordsAddRequest#
+records (2.Records.RecordAdd
+client_time (6
+security_data_key_type (2.Records.RecordKeyType"Œ
+RecordUpdate
+
+record_uid (
+client_modified_time (
+revision (
+data (
+non_shared_data (-
+record_links_add (2.Records.RecordLink
+record_links_remove (#
+audit (2.Records.RecordAudit+
+securityData	 (2.Records.SecurityData5
+securityScoreData
+ (2.Records.SecurityScoreData"ã
+RecordsUpdateRequest&
+records (2.Records.RecordUpdate
+client_time (6
+security_data_key_type (2.Records.RecordKeyType"é
+RecordFileForConversion
+
+record_uid (
+file_file_id (	
+thumb_file_id (	
+data (
+
+record_key (
+link_key ("J
+RecordFolderForConversion
+
+folder_uid (
+record_folder_key ("í
+RecordConvertToV3
+
+record_uid (
+client_modified_time (
+revision (
+data (
+non_shared_data (#
+audit (2.Records.RecordAudit5
+record_file (2 .Records.RecordFileForConversion6
+
+folder_key (2".Records.RecordFolderForConversion"]
+RecordsConvertToV3Request+
+records (2.Records.RecordConvertToV3
+client_time ("'
+RecordsRemoveRequest
+records (">
+RecordRevert
+
+record_uid (
+revert_to_revision (">
+RecordsRevertRequest&
+records (2.Records.RecordRevert"c
+RecordLinkError
+
+record_uid (+
+status (2.Records.RecordModifyResult
+message (	"ï
+RecordModifyStatus
+
+record_uid (+
+status (2.Records.RecordModifyResult
+message (	-
+link_errors (2.Records.RecordLinkError"W
+RecordsModifyResponse,
+records (2.Records.RecordModifyStatus
+revision ("Y
+RecordAddAuditData
+
+record_uid (
+revision (
+data (
+version ("C
+AddAuditDataRequest,
+records (2.Records.RecordAddAuditData"t
+File
+
+record_uid (
+
+record_key (
+data (
+fileSize (
+	thumbSize (
+	is_script ("D
+FilesAddRequest
+files (2.Records.File
+client_time ("ß
+FileAddStatus
+
+record_uid (&
+status (2.Records.FileAddResult
+url (	
+
+parameters (	
+thumbnail_parameters (	
+success_status_code ("K
+FilesAddResponse%
+files (2.Records.FileAddStatus
+revision ("f
+FilesGetRequest
+record_uids (
+for_thumbnails (&
+emergency_access_account_owner (	"¢
+FileGetStatus
+
+record_uid (&
+status (2.Records.FileGetResult
+url (	
+success_status_code (+
+fileKeyType (2.Records.RecordKeyType"9
+FilesGetResponse%
+files (2.Records.FileGetStatus"ç
+ApplicationAddRequest
+app_uid (
+
+record_key (
+client_modified_time (
+data (#
+audit (2.Records.RecordAudit"à
+"GetRecordDataWithAccessInfoRequest
+
+clientTime (
+	recordUid (;
+recordDetailsInclude (2.Records.RecordDetailsInclude"Ü
+UserPermission
+username (	
+owner (
+
+shareAdmin (
+sharable (
+editable (
+awaitingApproval (
+
+expiration (
+
+accountUid (=
+timerNotificationType	 (2.Records.TimerNotificationType
+rotateOnExpiration
+ ("ÿ
+SharedFolderPermission
+sharedFolderUid (
+
+resharable (
+editable (
+revision (
+
+expiration (=
+timerNotificationType (2.Records.TimerNotificationType
+rotateOnExpiration ("Ë
+
+RecordData
+revision (
+version (
+shared (
+encryptedRecordData (	
+encryptedExtraData (	
+clientModifiedTime (
+nonSharedData (	-
+linkedRecordData (2.Records.RecordData
+fileId	 (
+fileSize
+ (
+thumbnailSize (-
+recordKeyType (2.Records.RecordKeyType
+	recordKey (
+	recordUid ("»
+RecordDataWithAccessInfo
+	recordUid ('
+
+recordData (2.Records.RecordData/
+userPermission (2.Records.UserPermission?
+sharedFolderPermission (2.Records.SharedFolderPermission"â
+#GetRecordDataWithAccessInfoResponseC
+recordDataWithAccessInfo (2!.Records.RecordDataWithAccessInfo
+noPermissionRecordUid ("j
+IsObjectShareAdmin
+uid (
+isAdmin (6
+
+objectType (2".Records.CheckShareAdminObjectType"H
+AmIShareAdmin7
+isObjectShareAdmin (2.Records.IsObjectShareAdmin"º
+RecordShareUpdateRequest.
+addSharedRecord (2.Records.SharedRecord1
+updateSharedRecord (2.Records.SharedRecord1
+removeSharedRecord (2.Records.SharedRecord
+
+pt (	"ƒ
+SharedRecord
+
+toUsername (	
+	recordUid (
+	recordKey (
+sharedFolderUid (
+teamUid (
+editable (
+	shareable (
+transfer (
+	useEccKey	 (
+removeVaultData
+ (
+
+expiration (=
+timerNotificationType (2.Records.TimerNotificationType
+rotateOnExpiration ("’
+RecordShareUpdateResponse:
+addSharedRecordStatus (2.Records.SharedRecordStatus=
+updateSharedRecordStatus (2.Records.SharedRecordStatus=
+removeSharedRecordStatus (2.Records.SharedRecordStatus"Z
+SharedRecordStatus
+	recordUid (
+status (	
+message (	
+username (	"G
+GetRecordPermissionsRequest
+
+recordUids (
+isShareAdmin ("T
+GetRecordPermissionsResponse4
+recordPermissions (2.Records.RecordPermission"l
+RecordPermission
+	recordUid (
+owner (
+canEdit (
+canShare (
+canTransfer ("h
+GetShareObjectsRequest
+	startWith (	
+contains (	
+filtered (
+sharedFolderUid ("Á
+GetShareObjectsResponse.
+shareRelationships (2.Records.ShareUser,
+shareFamilyUsers (2.Records.ShareUser0
+shareEnterpriseUsers (2.Records.ShareUser&
+
+shareTeams (2.Records.ShareTeam(
+shareMCTeams (2.Records.ShareTeam2
+shareMCEnterpriseUsers (2.Records.ShareUser6
+shareEnterpriseNames (2.Records.ShareEnterprise"Ω
+	ShareUser
+username (	
+fullname (	
+enterpriseId ($
+status (2.Records.ShareStatus
+isShareAdmin ("
+isAdminOfSharedFolderOwner (
+userAccountUid ("D
+	ShareTeam
+teamname (	
+enterpriseId (
+teamUid ("?
+ShareEnterprise
+enterprisename (	
+enterpriseId ("S
+RecordsOnwershipTransferRequest0
+transferRecords (2.Records.TransferRecord"[
+TransferRecord
+username (	
+	recordUid (
+	recordKey (
+	useEccKey ("_
+ RecordsOnwershipTransferResponse;
+transferRecordStatus (2.Records.TransferRecordStatus"\
+TransferRecordStatus
+username (	
+	recordUid (
+status (	
+message (	"y
+RecordsUnshareRequest4
+sharedFolders (2.Records.RecordsUnshareFolder*
+users (2.Records.RecordsUnshareUser"Ü
+RecordsUnshareResponse:
+sharedFolders (2#.Records.RecordsUnshareFolderStatus0
+users (2!.Records.RecordsUnshareUserStatus"B
+RecordsUnshareFolder
+	recordUid (
+sharedFolderUid (";
+RecordsUnshareUser
+	recordUid (
+
+accountUid ("H
+RecordsUnshareFolderStatus
+	recordUid (
+sharedFolderUid ("A
+RecordsUnshareUserStatus
+	recordUid (
+
+accountUid ("[
+TimedAccessCallbackPayload=
+timeLimitedAccessType (2.Records.TimeLimitedAccessType"˝
+TimeLimitedAccessRequest
+
+accountUid (
+teamUid (
+	recordUid (
+sharedObjectUid (=
+timeLimitedAccessType (2.Records.TimeLimitedAccessType
+
+expiration (=
+timerNotificationType (2.Records.TimerNotificationType"7
+TimeLimitedAccessStatus
+uid (
+message (	"„
+TimeLimitedAccessResponse
+revision (:
+userAccessStatus (2 .Records.TimeLimitedAccessStatus:
+teamAccessStatus (2 .Records.TimeLimitedAccessStatus<
+recordAccessStatus (2 .Records.TimeLimitedAccessStatus*h
+RecordTypeScope
+RT_STANDARD 
+RT_USER
+RT_ENTERPRISE
+
+RT_PAM
+RT_PAM_CONFIGURATION*—
+RecordKeyType
+
+NO_KEY 
+ENCRYPTED_BY_DATA_KEY
+ENCRYPTED_BY_PUBLIC_KEY
+ENCRYPTED_BY_DATA_KEY_GCM
+ENCRYPTED_BY_PUBLIC_KEY_ECC
+ENCRYPTED_BY_ROOT_KEY_CBC
+ENCRYPTED_BY_ROOT_KEY_GCM*P
+RecordFolderType
+user_folder 
+shared_folder
+shared_folder_folder*Ï
+RecordModifyResult
+
+RS_SUCCESS 
+RS_OUT_OF_SYNC
+RS_ACCESS_DENIED
+RS_SHARE_DENIED
+RS_RECORD_EXISTS
+RS_OLD_RECORD_VERSION_TYPE
+RS_NEW_RECORD_VERSION_TYPE
+RS_FILES_NOT_MATCH
+RS_RECORD_NOT_SHAREABLE
+RS_ATTACHMENT_NOT_SHAREABLE	
+RS_FILE_LIMIT_REACHED
+
+RS_SIZE_EXCEEDED_LIMIT$
+ RS_ONLY_OWNER_CAN_MODIFY_SCRIPTS*-
+FileAddResult
+
+FA_SUCCESS 
+FA_ERROR*C
+FileGetResult
+
+FG_SUCCESS 
+FG_ERROR
+FG_ACCESS_DENIED*J
+RecordDetailsInclude
+DATA_PLUS_SHARE 
+	DATA_ONLY
+
+SHARE_ONLY*b
+CheckShareAdminObjectType
+CHECK_SA_INVALID_TYPE 
+CHECK_SA_ON_SF
+CHECK_SA_ON_RECORD*1
+ShareStatus
+
+ACTIVE 	
+BLOCK
+INVITED*:
+RecordTransactionType
+RTT_GENERAL 
+RTT_ROTATION*‹
+TimeLimitedAccessType$
+ INVALID_TIME_LIMITED_ACCESS_TYPE 
+USER_ACCESS_TO_RECORD'
+#USER_OR_TEAM_ACCESS_TO_SHAREDFOLDER!
+RECORD_ACCESS_TO_SHAREDFOLDER
+USER_ACCESS_TO_SHAREDFOLDER
+TEAM_ACCESS_TO_SHAREDFOLDER
+RECORD_ACCESS_TO_FOLDER
+USER_ACCESS_TO_FOLDER
+TEAM_ACCESS_TO_FOLDER!
+USER_OR_TEAM_ACCESS_TO_FOLDER	*\
+TimerNotificationType
+NOTIFICATION_OFF 
+NOTIFY_OWNER
+NOTIFY_PRIVILEGED_USERSB#
+com.keepersecurity.protoBRecordsbproto3
+÷
+breachwatch.protoBreachWatch"°
+BreachWatchRecordRequest
+	recordUid (
+encryptedData (=
+breachWatchInfoType (2 .BreachWatch.BreachWatchInfoType
+updateUserWhoScanned ("z
+BreachWatchUpdateRequestG
+breachWatchRecordRequest (2%.BreachWatch.BreachWatchRecordRequest
+encryptedData ("L
+BreachWatchRecordStatus
+	recordUid (
+status (	
+reason (	"b
+BreachWatchUpdateResponseE
+breachWatchRecordStatus (2$.BreachWatch.BreachWatchRecordStatus"3
+BreachWatchTokenRequest
+breachWatchToken ("M
+BreachWatchTokenResponse
+breachWatchToken (
+clientEncrypted ("Y
+AnonymizedTokenResponse
+domainToken (
+
+emailToken (
+passwordToken ("(
+	HashCheck
+hash1 (
+euid ("s
+BreachWatchStatusRequest
+anonymizedToken ()
+	hashCheck (2.BreachWatch.HashCheck
+removedEuid ("A
+
+HashStatus
+hash1 (
+euid (
+breachDetected ("H
+BreachWatchStatusResponse+
+
+hashStatus (2.BreachWatch.HashStatus"Z
+EnterprisePublicKeyResponse
+enterprisePublicKey (
+enterpriseECCPublicKey ("&
+FreeScanRequest
+hashedEmail ("C
+FreeScanResponse
+emailBreaches (
+passwordBreaches (" 
+PaidUserRequest
+email (	"$
+PaidUserResponse
+paidUser ("$
+DetailedScanRequest
+email (	"'
+UseOneTimeTokenRequest
+token ("g
+BreachEvent
+site (	
+email (	
+passwordInBreach (
+date (	
+description (	"â
+UseOneTimeTokenResponse
+emailBreaches (
+passwordBreaches (.
+breachEvents (2.BreachWatch.BreachEvent
+email (	"-
+OneTimeUseToken
+email (	
+pad (	"1
+FreePasswordScanRequest
+hashedPassword ("4
+FreePasswordScanResponse
+passwordBreaches (*9
+BreachWatchInfoType
+
+RECORD 
+ALTERNATE_PASSWORDB'
+com.keepersecurity.protoBBreachWatchbproto3
+î
+NotificationCenter.protoNotificationCenterGraphSync.proto".
+EncryptedData
+version (
+data ("2
+NotificationParameter
+key (	
+data ("°
+Notification2
+type (2$.NotificationCenter.NotificationType>
+category (2(.NotificationCenter.NotificationCategoryB'
+sender (2.GraphSync.GraphSyncRef
+senderFullName (	8
+encryptedData (2!.NotificationCenter.EncryptedData%
+refs (2.GraphSync.GraphSyncRef<
+
+categories (2(.NotificationCenter.NotificationCategory=
+
+parameters (2).NotificationCenter.NotificationParameter"ó
+NotificationReadMark
+uid (
+notification_edge_id (
+mark_edge_id (>
+
+readStatus (2*.NotificationCenter.NotificationReadStatus"¶
+NotificationContent8
+notification (2 .NotificationCenter.NotificationH @
+
+readStatus (2*.NotificationCenter.NotificationReadStatusH H
+approvalStatus (2..NotificationCenter.NotificationApprovalStatusH 
+trimmingPoint (H 
+clientTypeIDs (
+	deviceIDs (B
+type"o
+NotificationWrapper
+uid (8
+content (2'.NotificationCenter.NotificationContent
+	timestamp ("m
+NotificationSync5
+data (2'.NotificationCenter.NotificationWrapper
+	syncPoint (
+hasMore ("g
+ReadStatusUpdate
+notificationUid (:
+status (2*.NotificationCenter.NotificationReadStatus"o
+ApprovalStatusUpdate
+notificationUid (>
+status (2..NotificationCenter.NotificationApprovalStatus"^
+ProcessMarkReadEventsRequest>
+readStatusUpdate (2$.NotificationCenter.ReadStatusUpdate"÷
+NotificationSendRequest+
+
+recipients (2.GraphSync.GraphSyncRef6
+notification (2 .NotificationCenter.Notification
+clientTypeIDs (
+	deviceIDs (
+predefinedUid (H àB
+_predefinedUid"^
+NotificationsSendRequestB
+notifications (2+.NotificationCenter.NotificationSendRequest",
+NotificationSyncRequest
+	syncPoint ("9
+SentNotification
+user (
+notificationUid ("ß
+(NotificationsApprovalStatusUpdateRequest>
+status (2..NotificationCenter.NotificationApprovalStatus;
+notifications (2$.NotificationCenter.SentNotification*ü
+NotificationCategory
+NC_UNSPECIFIED 
+
+NC_ACCOUNT
+
+NC_SHARING
+NC_ENTERPRISE
+NC_SECURITY
+
+NC_REQUEST
+	NC_SYSTEM
+NC_PROMOTION*„
+NotificationType
+NT_UNSPECIFIED 
+NT_ALERT
+NT_DEVICE_APPROVAL
+NT_MASTER_PASS_UPDATED
+NT_SHARE_APPROVAL
+NT_SHARE_APPROVAL_APPROVED
+	NT_SHARED
+NT_TRANSFERRED
+NT_LICENSE_LIMIT_REACHED
+NT_APPROVAL_REQUEST	
+NT_APPROVED_RESPONSE
+
+NT_DENIED_RESPONSE
+NT_2FA_CONFIGURED
+NT_SHARE_APPROVAL_DENIED
+NT_DEVICE_APPROVAL_APPROVED
+NT_DEVICE_APPROVAL_DENIED
+NT_ACCOUNT_CREATED
+NT_2FA_ENABLED
+NT_2FA_DISABLED
+NT_SECURITY_KEYS_ENABLED
+NT_SECURITY_KEYS_DISABLED#
+NT_SSL_CERTIFICATE_EXPIRES_SOON
+NT_SSL_CERTIFICATE_EXPIRED*Y
+NotificationReadStatus
+NRS_UNSPECIFIED 
+NRS_LAST
+NRS_READ
+
+NRS_UNREAD*Ü
+NotificationApprovalStatus
+NAS_UNSPECIFIED 
+NAS_APPROVED
+
+NAS_DENIED
+NAS_LOST_APPROVAL_RIGHTS
+NAS_LOST_ACCESSB.
+com.keepersecurity.protoBNotificationCenterbproto3
+À
+	dag.protoDag">
+Ref
+type (2.Dag.RefType
+value (
+name (	"z
+Data
+dataType (2.Dag.DataType
+ref (2.Dag.Ref
+	parentRef (2.Dag.Ref
+content (
+path (	"G
+SyncData
+data (2	.Dag.Data
+	syncPoint (
+hasMore ("q
+	DebugData
+dataType (	
+path (	
+ref (2.Dag.DebugRefInfo$
+	parentRef (2.Dag.DebugRefInfo".
+DebugRefInfo
+refType (	
+value (*ç
+RefType
+GENERAL 
+USER
+
+DEVICE
+REC
+
+FOLDER
+TEAM
+
+ENTERPRISE
+PAM_DIRECTORY
+PAM_MACHINE
+PAM_USER	*X
+DataType
+DATA 
+KEY
+LINK
+ACL
+DELETION
+
+DENIAL
+UNDENIALB
+com.keepersecurity.protoBDagbproto3
+˛Y
+folder.protoFolderrecord.proto	tla.proto"\
+EncryptedDataKey
+encryptedKey (2
+encryptedKeyType (2.Folder.EncryptedKeyType"Ç
+SharedFolderRecordData
+	folderUid (
+	recordUid (
+userId (2
+encryptedDataKey (2.Folder.EncryptedDataKey"\
+SharedFolderRecordDataList>
+sharedFolderRecordData (2.Folder.SharedFolderRecordData"_
+SharedFolderRecordFix
+	folderUid (
+	recordUid ( 
+encryptedRecordFolderKey ("Y
+SharedFolderRecordFixList<
+sharedFolderRecordFix (2.Folder.SharedFolderRecordFix"¢
+RecordRequest
+	recordUid (&
+
+recordType (2.Folder.RecordType
+
+recordData (
+encryptedRecordKey (&
+
+folderType (2.Folder.FolderType
+
+howLongAgo (
+	folderUid ( 
+encryptedRecordFolderKey (
+extra	 (
+nonSharedData
+ (
+fileIds ("E
+RecordResponse
+	recordUid (
+revision (
+status (	"Ä
+SharedFolderFields
+encryptedFolderName (
+manageUsers (
+manageRecords (
+canEdit (
+canShare ("3
+SharedFolderFolderFields
+sharedFolderUid ("è
+FolderRequest
+	folderUid (&
+
+folderType (2.Folder.FolderType
+parentFolderUid (
+
+folderData (
+encryptedFolderKey (6
+sharedFolderFields (2.Folder.SharedFolderFieldsB
+sharedFolderFolderFields (2 .Folder.SharedFolderFolderFields"E
+FolderResponse
+	folderUid (
+revision (
+status (	"w
+ImportFolderRecordRequest,
+folderRequest (2.Folder.FolderRequest,
+recordRequest (2.Folder.RecordRequest"|
+ImportFolderRecordResponse.
+folderResponse (2.Folder.FolderResponse.
+recordResponse (2.Folder.RecordResponse"…
+SharedFolderUpdateRecord
+	recordUid (
+sharedFolderUid (
+teamUid ((
+canEdit (2.Folder.SetBooleanValue)
+canShare (2.Folder.SetBooleanValue
+encryptedRecordKey (
+revision (
+
+expiration (=
+timerNotificationType	 (2.Records.TimerNotificationType
+rotateOnExpiration
+ ("Ã
+SharedFolderUpdateUser
+username (	,
+manageUsers (2.Folder.SetBooleanValue.
+manageRecords (2.Folder.SetBooleanValue
+sharedFolderKey (B
+
+expiration (=
+timerNotificationType (2.Records.TimerNotificationType6
+typedSharedFolderKey (2.Folder.EncryptedDataKey
+rotateOnExpiration ("ô
+SharedFolderUpdateTeam
+teamUid (
+manageUsers (
+manageRecords (
+sharedFolderKey (B
+
+expiration (=
+timerNotificationType (2.Records.TimerNotificationType6
+typedSharedFolderKey (2.Folder.EncryptedDataKey
+rotateOnExpiration ("é
+SharedFolderUpdateV3Request,
+$sharedFolderUpdateOperation_dont_use (
+sharedFolderUid (!
+encryptedSharedFolderName (
+revision (
+forceUpdate (
+fromTeamUid (3
+defaultManageUsers (2.Folder.SetBooleanValue5
+defaultManageRecords (2.Folder.SetBooleanValue/
+defaultCanEdit	 (2.Folder.SetBooleanValue0
+defaultCanShare
+ (2.Folder.SetBooleanValue?
+sharedFolderAddRecord (2 .Folder.SharedFolderUpdateRecord;
+sharedFolderAddUser (2.Folder.SharedFolderUpdateUser;
+sharedFolderAddTeam (2.Folder.SharedFolderUpdateTeamB
+sharedFolderUpdateRecord (2 .Folder.SharedFolderUpdateRecord>
+sharedFolderUpdateUser (2.Folder.SharedFolderUpdateUser>
+sharedFolderUpdateTeam (2.Folder.SharedFolderUpdateTeam 
+sharedFolderRemoveRecord (
+sharedFolderRemoveUser (	
+sharedFolderRemoveTeam (
+sharedFolderOwner (	"c
+SharedFolderUpdateV3RequestV2B
+sharedFoldersUpdateV3 (2#.Folder.SharedFolderUpdateV3Request"C
+SharedFolderUpdateRecordStatus
+	recordUid (
+status (	"@
+SharedFolderUpdateUserStatus
+username (	
+status (	"?
+SharedFolderUpdateTeamStatus
+teamUid (
+status (	"à
+SharedFolderUpdateV3Response
+revision (K
+sharedFolderAddRecordStatus (2&.Folder.SharedFolderUpdateRecordStatusG
+sharedFolderAddUserStatus (2$.Folder.SharedFolderUpdateUserStatusG
+sharedFolderAddTeamStatus (2$.Folder.SharedFolderUpdateTeamStatusN
+sharedFolderUpdateRecordStatus (2&.Folder.SharedFolderUpdateRecordStatusJ
+sharedFolderUpdateUserStatus (2$.Folder.SharedFolderUpdateUserStatusJ
+sharedFolderUpdateTeamStatus (2$.Folder.SharedFolderUpdateTeamStatusN
+sharedFolderRemoveRecordStatus (2&.Folder.SharedFolderUpdateRecordStatusJ
+sharedFolderRemoveUserStatus	 (2$.Folder.SharedFolderUpdateUserStatusJ
+sharedFolderRemoveTeamStatus
+ (2$.Folder.SharedFolderUpdateTeamStatus
+sharedFolderUid (
+status (	"m
+SharedFolderUpdateV3ResponseV2K
+sharedFoldersUpdateV3Response (2$.Folder.SharedFolderUpdateV3Response"˙
+)GetDeletedSharedFoldersAndRecordsResponse2
+sharedFolders (2.Folder.DeletedSharedFolder>
+sharedFolderRecords (2!.Folder.DeletedSharedFolderRecord4
+deletedRecordData (2.Folder.DeletedRecordData#
+	usernames (2.Folder.Username"—
+DeletedSharedFolder
+sharedFolderUid (
+	folderUid (
+	parentUid (
+sharedFolderKey (-
+folderKeyType (2.Records.RecordKeyType
+data (
+dateDeleted (
+revision ("Å
+DeletedSharedFolderRecord
+	folderUid (
+	recordUid (
+sharedRecordKey (
+dateDeleted (
+revision ("Ö
+DeletedRecordData
+	recordUid (
+ownerUid (
+revision (
+clientModifiedTime (
+data (
+version ("0
+Username
+
+accountUid (
+username (	"ä
+,RestoreDeletedSharedFoldersAndRecordsRequest,
+folders (2.Folder.RestoreSharedObject,
+records (2.Folder.RestoreSharedObject"<
+RestoreSharedObject
+	folderUid (
+
+recordUids ("É
+
+FolderData
+	folderUid (
+	parentUid (
+data (%
+type (2.Folder.FolderUsageType7
+inheritUserPermissions (2.Folder.SetBooleanValue
+	folderKey (#
+	ownerInfo (2.Folder.UserInfo
+dateCreated (
+lastModified	 ("z
+	FolderKey
+	folderUid (
+	parentUid (
+	folderKey (4
+encryptedBy (2.Folder.FolderKeyEncryptionType":
+FolderAddRequest&
+
+folderData (2.Folder.FolderData"d
+FolderModifyResult
+	folderUid (*
+status (2.Folder.FolderModifyStatus
+message (	"I
+FolderAddResponse4
+folderAddResults (2.Folder.FolderModifyResult"=
+FolderUpdateRequest&
+
+folderData (2.Folder.FolderData"O
+FolderUpdateResponse7
+folderUpdateResults (2.Folder.FolderModifyResult"√
+FolderPermissions
+canAdd (
+	canRemove (
+	canDelete (
+canListAccess (
+canUpdateAccess (
+canChangeOwnership (
+canEditRecords (
+canViewRecords (
+canApproveAccess	 (
+canRequestAccess
+ (
+canUpdateSetting (
+canListRecords (
+canListFolders ("É
+Capabilities'
+canAdd (2.Folder.SetBooleanValue*
+	canRemove (2.Folder.SetBooleanValue*
+	canDelete (2.Folder.SetBooleanValue.
+canListAccess (2.Folder.SetBooleanValue0
+canUpdateAccess (2.Folder.SetBooleanValue3
+canChangeOwnership (2.Folder.SetBooleanValue/
+canEditRecords (2.Folder.SetBooleanValue/
+canViewRecords (2.Folder.SetBooleanValue1
+canApproveAccess	 (2.Folder.SetBooleanValue1
+canRequestAccess
+ (2.Folder.SetBooleanValue1
+canUpdateSetting (2.Folder.SetBooleanValue/
+canListRecords (2.Folder.SetBooleanValue/
+canListFolders (2.Folder.SetBooleanValue"∏
+FolderRecordUpdateRequest
+	folderUid (*
+
+addRecords (2.Folder.RecordMetadata-
+updateRecords (2.Folder.RecordMetadata-
+removeRecords (2.Folder.RecordMetadata"—
+RecordMetadata
+	recordUid (
+encryptedRecordKey (8
+encryptedRecordKeyType (2.Folder.EncryptedKeyType0
+tlaProperties (2.common.tla.TLAProperties$
+recordKeyEncryptedByOwnerKey ("ì
+FolderRecord
+	folderUid (.
+recordMetadata (2.Folder.RecordMetadata@
+folderKeyEncryptionType (2.Folder.FolderKeyEncryptionType"s
+FolderRecordUpdateResponse
+	folderUid (B
+folderRecordUpdateResult (2 .Folder.FolderRecordUpdateResult"j
+FolderRecordUpdateResult
+	recordUid (*
+status (2.Folder.FolderModifyStatus
+message (	"ù
+FolderAccessData
+	folderUid (
+accessTypeUid (&
+
+accessType (2.Folder.AccessType.
+accessRoleType (2.Folder.AccessRoleType+
+	folderKey (2.Folder.EncryptedDataKey
+	inherited (
+hidden (.
+permissions (2.Folder.FolderPermissions0
+tlaProperties	 (2.common.tla.TLAProperties
+dateCreated
+ (
+lastModified (
+deniedAccess (
+accessorName (	"\
+RevokedAccess
+	folderUid (
+actorUid (&
+
+accessType (2.Folder.AccessType"#
+FolderRemoved
+
+folder_uid ("ì
+RecordAccessData
+accessTypeUid (&
+
+accessType (2.Folder.AccessType
+	recordUid (.
+accessRoleType (2.Folder.AccessRoleType
+owner (
+	inherited (
+hidden (
+deniedAccess (
+can_view_title	 (
+can_edit
+ (
+can_view (
+can_list_access (
+can_update_access (
+
+can_delete (
+can_change_ownership (
+can_request_access (
+can_approve_access (
+dateCreated (
+lastModified (0
+tlaProperties (2.common.tla.TLAProperties"∏
+
+AccessData
+accessTypeUid (.
+accessRoleType (2.Folder.AccessRoleType
+deniedAccess (
+	inherited (
+hidden (*
+capabilities (2.Folder.Capabilities"∑
+FolderAccessRequest2
+folderAccessAdds (2.Folder.FolderAccessData5
+folderAccessUpdates (2.Folder.FolderAccessData5
+folderAccessRemoves (2.Folder.FolderAccessData"ü
+FolderAccessResult
+	folderUid (
+	accessUid (&
+
+accessType (2.Folder.AccessType*
+status (2.Folder.FolderModifyStatus
+message (	"O
+FolderAccessResponse7
+folderAccessResults (2.Folder.FolderAccessResult"0
+UserInfo
+
+accountUid (
+username (	"M
+
+RecordData
+user (2.Folder.UserInfo
+data (
+	recordUid ("{
+	RecordKey
+user_uid (
+
+record_uid (
+
+record_key (4
+encrypted_key_type (2.Folder.EncryptedKeyType*
+
+RecordType
+password *^
+
+FolderType
+default_folder 
+user_folder
+shared_folder
+shared_folder_folder*ñ
+EncryptedKeyType
+
+no_key 
+encrypted_by_data_key
+encrypted_by_public_key
+encrypted_by_data_key_gcm
+encrypted_by_public_key_ecc*M
+SetBooleanValue
+BOOLEAN_NO_CHANGE 
+BOOLEAN_TRUE
+BOOLEAN_FALSE*R
+FolderUsageType
+
+UT_UNKNOWN 
+	UT_NORMAL
+UT_WORKFLOW
+UT_TRASHCAN*l
+FolderKeyEncryptionType
+ENCRYPTED_BY_USER_KEY 
+ENCRYPTED_BY_PARENT_KEY
+ENCRYPTED_BY_TEAM_KEY*T
+FolderModifyStatus
+SUCCESS 
+BAD_REQUEST
+ACCESS_DENIED
+	NOT_FOUND*§
+FolderPermissionBits
+
+noBits 
+
+canAdd
+	canRemove
+	canDelete
+canListAccess
+canUpdateAccess
+canChangeOwnership 
+canEditRecords@
+canViewRecordsÄ
+canApproveAccessÄ
+canRequestAccessÄ
+canUpdateSettingÄ
+canListRecordsÄ
+canListFoldersÄ *õ
+AccessRoleType
+	NAVIGATOR 
+	REQUESTOR
+
+VIEWER
+SHARED_MANAGER
+CONTENT_MANAGER
+CONTENT_SHARE_MANAGER
+MANAGER
+
+UNRESOLVED*z
+
+AccessType
+
+AT_UNKNOWN 
+AT_OWNER
+AT_USER
+AT_TEAM
+AT_ENTERPRISE
+	AT_FOLDER
+AT_APPLICATION*:
+
+ObjectType
+
+OT_UNKNOWN 
+	OT_RECORD
+	OT_FOLDERB"
+com.keepersecurity.protoBFolderbproto3
+ì
+
+record_sharing.protorecord.v3.sharingfolder.proto	tla.protogoogle/api/annotations.proto"›
+Request@
+createSharingPermissions (2.record.v3.sharing.Permissions@
+updateSharingPermissions (2.record.v3.sharing.Permissions@
+revokeSharingPermissions (2.record.v3.sharing.Permissions
+echo (	"Ö
+Permissions
+recipientUid (
+	recordUid (
+	recordKey (
+	useEccKey ('
+rules (2.Folder.RecordAccessData"µ
+Response7
+createdSharingStatus (2.record.v3.sharing.Status7
+updatedSharingStatus (2.record.v3.sharing.Status7
+revokedSharingStatus (2.record.v3.sharing.Status"t
+Status
+	recordUid (0
+status (2 .record.v3.sharing.SharingStatus
+message (	
+recipientUid ("4
+RevokedAccess
+	recordUid (
+actorUid ("o
+RecordSharingState
+	recordUid (
+isDirectlyShared (
+isIndirectlyShared (
+isShared (*©
+SharingStatus
+SUCCESS 
+PENDING_ACCEPT
+USER_NOT_FOUND
+ALREADY_SHARED
+NOT_ALLOWED_TO_SHARE
+ACCESS_DENIED"
+NOT_ALLOWED_TO_SET_PERMISSIONS2ã
+RecordSharingServices
+ShareRecord.record.v3.sharing.Request.record.v3.sharing.Response"+Ç”‰ì%" /api/rest/vault/records/v3/share:*B2
+.com.keepersecurity.proto.api.record.v3.sharingPbproto3
+Ì
+GraphSync.proto	GraphSync"M
+GraphSyncRef 
+type (2.GraphSync.RefType
+value (
+name (	"p
+GraphSyncActor+
+type (2.GraphSync.GraphSyncActorType
+
+id (
+name (	
+effectiveUserId ("¨
+GraphSyncData*
+type (2.GraphSync.GraphSyncDataType$
+ref (2.GraphSync.GraphSyncRef*
+	parentRef (2.GraphSync.GraphSyncRef
+content (
+path (	"x
+GraphSyncDataPlus&
+data (2.GraphSync.GraphSyncData
+	timestamp ((
+actor (2.GraphSync.GraphSyncActor"W
+GraphSyncQuery
+streamId (
+origin (
+	syncPoint (
+maxCount ("s
+GraphSyncResult
+streamId (
+	syncPoint (*
+data (2.GraphSync.GraphSyncDataPlus
+hasMore ("A
+GraphSyncMultiQuery*
+queries (2.GraphSync.GraphSyncQuery"C
+GraphSyncMultiResult+
+results (2.GraphSync.GraphSyncResult"j
+GraphSyncAddDataRequest'
+origin (2.GraphSync.GraphSyncRef&
+data (2.GraphSync.GraphSyncData"'
+GraphSyncLeafsQuery
+vertices ("<
+GraphSyncRefsResult%
+refs (2.GraphSync.GraphSyncRef*Â
+RefType
+RFT_GENERAL 
+RFT_USER
+
+RFT_DEVICE
+RFT_REC
+
+RFT_FOLDER
+RFT_TEAM
+RFT_ENTERPRISE
+RFT_PAM_DIRECTORY
+RFT_PAM_MACHINE
+RFT_PAM_DATABASE	
+RFT_PAM_USER
+
+RFT_PAM_NETWORK
+RFT_PAM_BROWSER
+RFT_CONNECTION
+RFT_WORKFLOW
+RFT_NOTIFICATION
+RFT_USER_INFO
+RFT_TEAM_INFO
+RFT_ROLE*[
+GraphSyncDataType
+GSE_DATA 
+GSE_KEY
+GSE_LINK
+GSE_ACL
+GSE_DELETION*H
+GraphSyncActorType
+GSA_USER 
+GSA_SERVICE
+GSA_PAM_GATEWAYB%
+com.keepersecurity.protoB	GraphSyncbproto3
+£
+	tla.proto
+common.tla"Å
+TLAProperties
+
+expiration (@
+timerNotificationType (2!.common.tla.TimerNotificationType
+rotateOnExpiration (*\
+TimerNotificationType
+NOTIFICATION_OFF 
+NOTIFY_OWNER
+NOTIFY_PRIVILEGED_USERSB 
+com.keepersecurity.proto.tlaPbproto3

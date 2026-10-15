@@ -2,6 +2,8 @@
 // Assets live under assets/ (icon.ico is the Windows resource).
 // Non-Windows targets: no-op.
 
+use prost::Message;
+
 fn main() {
     // Release-only on Windows: keep debug builds fast; skip icon tooling.
     #[cfg(all(windows, not(debug_assertions)))]
@@ -9,8 +11,22 @@ fn main() {
         embed_windows_icon();
     }
 
+    compile_keeper_protos();
+
     println!("cargo:rerun-if-changed=assets/icon.ico");
+    println!("cargo:rerun-if-changed=proto/keeper.fds.bin");
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+// The descriptor set is lifted from Commander by tools/extract-protos.ts; compiling it
+// directly means no protoc install and field numbers identical to Keeper's own schema.
+fn compile_keeper_protos() {
+    let fds = prost_types::FileDescriptorSet::decode(&include_bytes!("proto/keeper.fds.bin")[..])
+        .expect("proto/keeper.fds.bin is not a valid FileDescriptorSet");
+    prost_build::Config::new()
+        .include_file("keeper_protos.rs")
+        .compile_fds(fds)
+        .expect("failed to generate Keeper protobuf code");
 }
 
 #[cfg(all(windows, not(debug_assertions)))]
