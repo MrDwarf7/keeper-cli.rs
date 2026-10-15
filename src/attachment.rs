@@ -9,13 +9,13 @@ use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::str::FromStr;
-use std::time;
 
 use aes::cipher::block_padding::Pkcs7;
 use clap::Args;
 use prost::Message;
-use reqwest::blocking;
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use crate::auth::Session;
 use crate::commands::{App, Run};
@@ -232,10 +232,10 @@ fn connected(app: &mut App) -> Result<(&mut Session, &Vault)> {
 }
 
 /// Large attachments can legitimately take minutes; only the connection is time-limited.
-fn http_client() -> Result<blocking::Client> {
-    Ok(blocking::Client::builder()
-        .connect_timeout(time::Duration::from_secs(15))
-        .timeout(None::<time::Duration>)
+fn http_client() -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(None::<std::time::Duration>)
         .build()?)
 }
 
@@ -468,7 +468,7 @@ fn legacy_tickets(
     record: &Record,
     attachments: &[Attachment],
 ) -> Result<Vec<Option<Ticket>>> {
-    let mut rq = json!({
+    let mut rq = serde_json::json!({
         "command": "request_download",
         "file_ids": attachments.iter().map(|attachment| attachment.id.as_str()).collect::<Vec<_>>(),
     });
@@ -500,7 +500,7 @@ fn access_folder<'v>(vault: &'v Vault, record: &Record) -> Option<&'v str> {
 }
 
 /// Fetch and authenticate a signed download before writing any plaintext to disk.
-fn download(http: &blocking::Client, ticket: &Ticket, key: &[u8], path: &Path) -> Result<()> {
+fn download(http: &reqwest::blocking::Client, ticket: &Ticket, key: &[u8], path: &Path) -> Result<()> {
     let mut response = http.get(&ticket.url).send()?;
     if !response.status().is_success() {
         return Err(Error::Generic(format!("HTTP status code {}", response.status().as_u16())));
@@ -670,7 +670,7 @@ fn add_request(files: &[LocalFile], new: &[NewFile], data_key: &[u8]) -> Result<
             .iter()
             .zip(new)
             .map(|(file, new_file)| -> Result<FileEntry> {
-                let metadata = json!({
+                let metadata = serde_json::json!({
                     "title": file.name,
                     "name": file.name,
                     "type": file.mime.to_string(),
@@ -721,12 +721,12 @@ fn form_framing(parameters: &str, boundary: &str, file_ref: &str) -> Result<(Str
     Ok((head, format!("\r\n--{boundary}--\r\n")))
 }
 
-fn send(http: &blocking::Client, target: &FileAddStatus, file: &LocalFile, new: &NewFile) -> Result<()> {
+fn send(http: &reqwest::blocking::Client, target: &FileAddStatus, file: &LocalFile, new: &NewFile) -> Result<()> {
     let frame = sealed(file, &new.key)?;
     let boundary = data_encoding::HEXLOWER.encode(&crypto::random_bytes(16));
     let (head, tail) = form_framing(&target.parameters, &boundary, &b64_encode(&new.uid))?;
     let len = (head.len() + frame.len() + tail.len()) as u64;
-    let body = blocking::Body::sized(
+    let body = reqwest::blocking::Body::sized(
         std::io::Cursor::new(head.into_bytes())
             .chain(std::io::Cursor::new(frame))
             .chain(std::io::Cursor::new(tail.into_bytes())),
@@ -748,7 +748,7 @@ fn link_request(record: &Record, new: &[NewFile], key_type: RecordKeyType) -> Re
     let mut data = record.data.clone();
     let fields = data
         .as_object_mut()
-        .map(|object| object.entry("fields").or_insert_with(|| json!([])))
+        .map(|object| object.entry("fields").or_insert_with(|| serde_json::json!([])))
         .and_then(Value::as_array_mut)
         .ok_or_else(|| Error::Generic(format!("Record {} has malformed data", record.uid)))?;
     let refs = new.iter().map(|file| Value::from(b64_encode(&file.uid)));
@@ -759,7 +759,7 @@ fn link_request(record: &Record, new: &[NewFile], key_type: RecordKeyType) -> Re
         .and_then(Value::as_array_mut);
     match listed {
         Some(listed) => listed.extend(refs),
-        None => fields.push(json!({"type": "fileRef", "value": refs.collect::<Vec<_>>()})),
+        None => fields.push(serde_json::json!({"type": "fileRef", "value": refs.collect::<Vec<_>>()})),
     }
     let mut json = serde_json::to_vec(&data)?;
     json.resize(json.len().max(384).next_multiple_of(16), b' ');

@@ -3,7 +3,6 @@
 //! Clipboard tools receive the text on stdin, so secrets do not appear in process arguments.
 
 use std::io::Write;
-use std::process::Stdio;
 
 use clap::{Args, ValueEnum};
 use serde_json::Value;
@@ -315,9 +314,9 @@ fn send_to_clipboard(text: &str) -> Result<()> {
     for tool in TOOLS {
         let spawned = std::process::Command::new(tool.program)
             .args(tool.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn();
         let mut child = match spawned {
             Ok(child) => child,

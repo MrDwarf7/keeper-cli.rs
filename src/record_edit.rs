@@ -15,7 +15,6 @@ mod field;
 
 use std::collections::BTreeSet;
 use std::str::FromStr;
-use std::time;
 
 use clap::{Args, ValueEnum};
 use field::{Body, Findings, Labels, NotesEdit, Spec, TypeDef};
@@ -342,8 +341,8 @@ fn random_uid() -> Uid {
 }
 
 fn now_millis() -> i64 {
-    time::SystemTime::now()
-        .duration_since(time::UNIX_EPOCH)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 

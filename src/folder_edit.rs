@@ -9,7 +9,7 @@ use std::str::FromStr;
 use aes::cipher::block_padding::Pkcs7;
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::auth::{self, Session};
 use crate::commands::{App, Run};
@@ -208,7 +208,7 @@ impl Run for Mkdir {
             })?;
             session.execute_v2(serde_json::to_value(request)?)?;
             let path = format!("{}{name}", Trail(vault, &parent));
-            println!("{}", json!({ "folder_uid": uid.to_string(), "name": name, "path": path }));
+            println!("{}", serde_json::json!({ "folder_uid": uid.to_string(), "name": name, "path": path }));
         };
         app.vault = None;
         Ok(())
@@ -515,7 +515,7 @@ impl TryFrom<&NewFolder<'_>> for Request {
     type Error = Error;
 
     fn try_from(new: &NewFolder<'_>) -> Result<Self> {
-        let mut data = json!({ "name": new.name });
+        let mut data = serde_json::json!({ "name": new.name });
         new.tint.apply(&mut data);
         let (folder_type, name, shared_folder_uid, perms) = match new.kind {
             Kind::User => (Node::UserFolder, None, None, Perms::default()),
@@ -640,7 +640,7 @@ impl Tint {
                     fields.remove("color");
                 }
             }
-            Self::Paint(color) => data["color"] = json!(color),
+            Self::Paint(color) => data["color"] = serde_json::json!(color),
         }
     }
 }
@@ -661,10 +661,10 @@ impl TryFrom<(&Folder, &Edit)> for Request {
         let mut data = if folder.data.is_object() {
             folder.data.clone()
         } else {
-            json!({})
+            serde_json::json!({})
         };
         if let Rename::To(name) = &edit.name {
-            data["name"] = json!(name);
+            data["name"] = serde_json::json!(name);
         }
         edit.tint.apply(&mut data);
         let (name, shared_folder_uid) = match &folder.kind {
