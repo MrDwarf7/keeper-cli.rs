@@ -1,5 +1,4 @@
 ---
-title: "Project Brief"
 description: "Purpose, implemented scope, and verification status."
 keywords: [brief, overview, scope, acceptance-criteria]
 order: 0
@@ -11,6 +10,9 @@ keeper-cli is a Rust command-line client based on the core of
 [Keeper Commander](https://github.com/Keeper-Security/Commander). It uses
 Commander's command names and supports one-shot commands and a plain interactive
 shell.
+
+The authenticated account owns its session, cached vault, and current folder as
+one unit, so switching accounts cannot reuse another account's local state.
 
 Keeper does not publish `.proto` files or a protocol specification. Protocol
 behavior is derived from descriptors embedded in Commander's generated Python

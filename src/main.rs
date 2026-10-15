@@ -46,9 +46,7 @@ fn run(cli: Cli) -> Result<()> {
         settings: config,
         user:     cli.user,
         password: cli.password.into(),
-        session:  None,
-        vault:    None,
-        cwd:      vault::Location::Root,
+        account:  None,
     };
     match cli.command {
         None | Some(Command::Shell) => shell(&mut app),

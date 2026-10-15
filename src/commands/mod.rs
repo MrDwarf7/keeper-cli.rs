@@ -1,5 +1,5 @@
-//! Command implementations. Each command is its clap argument struct plus an [`Run`] impl; the
-//! [`App`] carries what outlives one command (settings, session, vault, current folder).
+//! Command implementations. Each command is its clap argument struct plus a [`Run`] impl; the
+//! [`App`] carries settings and an authenticated account with its session, vault and current folder.
 
 pub mod folders;
 pub mod generate;
@@ -23,9 +23,23 @@ pub struct App {
     /// `--user`, which beats the account remembered in the settings.
     pub(crate) user:     Option<String>,
     pub(crate) password: Password,
-    pub(crate) session:  Option<Session>,
-    pub(crate) vault:    Option<Vault>,
-    pub(crate) cwd:      Location,
+    pub(crate) account:  Option<Account>,
+}
+
+pub(crate) struct Account {
+    pub(crate) session: Session,
+    pub(crate) vault:   Option<Vault>,
+    pub(crate) cwd:     Location,
+}
+
+impl From<Session> for Account {
+    fn from(session: Session) -> Self {
+        Self {
+            session,
+            vault: None,
+            cwd: Location::Root,
+        }
+    }
 }
 
 /// The synced vault together with the current folder, borrowed at once.
@@ -69,7 +83,11 @@ impl App {
     }
 
     pub fn prompt(&self) -> String {
-        let name = self.vault.as_ref().map_or("My Vault", |v| v.name_of(&self.cwd));
+        let name = self
+            .account
+            .as_ref()
+            .and_then(|account| account.vault.as_ref().map(|vault| vault.name_of(&account.cwd)))
+            .unwrap_or("My Vault");
         format!("{name}> ")
     }
 
@@ -90,37 +108,39 @@ impl App {
         let password = std::mem::replace(&mut self.password, Password::Prompt);
         let session = auth::login(&mut self.settings, user, password)?;
         eprintln!("Logged in as {}", session.user);
-        self.session = Some(session);
+        self.account = Some(session.into());
         self.sync()
     }
 
     pub(crate) fn sync(&mut self) -> Result<()> {
-        let session = self.session.as_mut().ok_or(Error::NotLoggedIn)?;
-        let vault = vault::sync_down(session)?;
+        let account = self.account.as_mut().ok_or(Error::NotLoggedIn)?;
+        account.vault = None;
+        let vault = vault::sync_down(&mut account.session)?;
         eprintln!("Decrypted {} records.", vault.records.len());
-        if vault.folder(&self.cwd).is_none() {
-            self.cwd = Location::Root;
+        if vault.folder(&account.cwd).is_none() {
+            account.cwd = Location::Root;
         }
-        self.vault = Some(vault);
+        account.vault = Some(vault);
         Ok(())
     }
 
     pub(crate) fn ensure_synced(&mut self) -> Result<()> {
-        match (&self.session, &self.vault) {
-            (None, _) => {
+        match self.account.as_ref() {
+            None => {
                 let user = self.default_user()?;
                 self.login(user)
             }
-            (Some(_), None) => self.sync(),
-            (Some(_), Some(_)) => Ok(()),
+            Some(Account { vault: None, .. }) => self.sync(),
+            Some(Account { vault: Some(_), .. }) => Ok(()),
         }
     }
 
     pub fn view(&mut self) -> Result<View<'_>> {
         self.ensure_synced()?;
+        let account = self.account.as_ref().ok_or(Error::NotLoggedIn)?;
         Ok(View {
-            vault: self.vault.as_ref().ok_or(Error::NotLoggedIn)?,
-            cwd:   &self.cwd,
+            vault: account.vault.as_ref().ok_or(Error::NotLoggedIn)?,
+            cwd:   &account.cwd,
         })
     }
 }

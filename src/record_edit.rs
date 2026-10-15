@@ -314,17 +314,18 @@ struct Ctx<'a> {
 /// vault is dropped afterwards and the next command downloads it again.
 fn with_vault<T>(app: &mut App, job: impl FnOnce(&mut Ctx<'_>) -> Result<T>) -> Result<T> {
     app.ensure_synced()?;
-    let cwd = app.cwd.clone();
+    let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+    let cwd = account.cwd.clone();
     let outcome = {
-        let session = app.session.as_mut().ok_or(Error::NotLoggedIn)?;
-        let vault = app.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+        let session = &mut account.session;
+        let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
         job(&mut Ctx {
             session,
             vault,
             cwd: &cwd,
         })
     };
-    app.vault = None;
+    account.vault = None;
     outcome
 }
 

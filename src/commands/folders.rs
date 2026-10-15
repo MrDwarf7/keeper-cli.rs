@@ -151,7 +151,7 @@ impl Run for Cd {
                 .ok_or_else(|| crate::Error::Generic(format!("Invalid folder path: {}", self.folder)))?
         };
         let path = app.view()?.vault.path_of(&target);
-        app.cwd = target;
+        app.account.as_mut().ok_or(crate::Error::NotLoggedIn)?.cwd = target;
         println!("{path}");
         Ok(())
     }

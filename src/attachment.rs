@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::ffi::OsStr;
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::str::FromStr;
 
@@ -223,12 +223,11 @@ struct Ticket {
     cipher: Cipher,
 }
 
-fn connected(app: &mut App) -> Result<(&mut Session, &Vault)> {
+fn connected(app: &mut App) -> Result<(&mut Session, &Vault, Location)> {
     app.ensure_synced()?;
-    match (app.session.as_mut(), app.vault.as_ref()) {
-        (Some(session), Some(vault)) => Ok((session, vault)),
-        _ => Err(Error::NotLoggedIn),
-    }
+    let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+    let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+    Ok((&mut account.session, vault, account.cwd.clone()))
 }
 
 /// Large attachments can legitimately take minutes; only the connection is time-limited.
@@ -241,7 +240,6 @@ fn http_client() -> Result<reqwest::blocking::Client> {
 
 impl Run for DownloadAttachment {
     fn run(self, app: &mut App) -> Result<()> {
-        let cwd = app.cwd.clone();
         let out_dir = match self.out_dir {
             Some(UserPath(dir)) => dir,
             None => std::env::current_dir()?,
@@ -257,7 +255,7 @@ impl Run for DownloadAttachment {
             Naming::Stored
         };
         let depth = if self.recursive { Depth::Subtree } else { Depth::Folder };
-        let (session, vault) = connected(app)?;
+        let (session, vault, cwd) = connected(app)?;
         let records = select_records(vault, &cwd, &self.records, depth);
         if records.is_empty() {
             return Err(Error::Generic(format!("Record(s) \"{}\" not found", self.records.join(", "))));
@@ -512,7 +510,15 @@ fn download(http: &reqwest::blocking::Client, ticket: &Ticket, key: &[u8], path:
     }
     response.read_to_end(&mut body)?;
     let plain = ticket.cipher.open(&mut body, key)?;
-    std::fs::write(path, plain).map_err(|error| Error::Generic(format!("{}: {error}", path.display())))
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| Error::Generic(format!("{}: {error}", path.display())))?;
+    if let Err(error) = file.write_all(plain) {
+        return Err(Error::Generic(format!("{}: {error} (partial file may remain)", path.display())));
+    }
+    Ok(())
 }
 
 /// Upload local files to a typed record.
@@ -612,9 +618,8 @@ impl NewFile {
 
 impl Run for UploadAttachment {
     fn run(self, app: &mut App) -> Result<()> {
-        let cwd = app.cwd.clone();
         let files = self.files.iter().map(LocalFile::try_from).collect::<Result<Vec<_>>>()?;
-        let (session, vault) = connected(app)?;
+        let (session, vault, cwd) = connected(app)?;
         let record = vault
             .resolve_record(&cwd, &self.record)
             .ok_or_else(|| Error::Generic(format!("Record UID not found for record \"{}\"", self.record)))?;
@@ -659,7 +664,7 @@ impl Run for UploadAttachment {
             return Err(Error::api(name, status.message.clone()));
         }
         eprintln!("Uploaded {} file(s) to \"{}\"", files.len(), record.title());
-        app.vault = None;
+        app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
         Ok(())
     }
 }
@@ -795,7 +800,6 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::io::Write as _;
 
     use super::*;
     use crate::uid::Uid;
@@ -1141,6 +1145,66 @@ mod tests {
         );
         server.join().unwrap();
         assert!(!path.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn download_refuses_a_target_created_after_name_selection() {
+        let dir = temp_dir();
+        let path = free_path(&dir, "out.bin", "record", "file");
+        let sentinel = b"keep this file";
+        std::fs::write(&path, sentinel).unwrap();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let key = [8u8; 32];
+        let sealed = crypto::encrypt_aes_v2(b"downloaded plaintext", &key).unwrap();
+        let (url, server) = serve_once("200 OK", sealed);
+        assert!(
+            download(
+                &http,
+                &Ticket {
+                    url,
+                    cipher: Cipher::Gcm
+                },
+                &key,
+                &path
+            )
+            .is_err()
+        );
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), sentinel);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn download_refuses_a_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir();
+        let target = dir.join("sentinel");
+        let path = free_path(&dir, "out.bin", "record", "file");
+        let sentinel = b"keep this file";
+        std::fs::write(&target, sentinel).unwrap();
+        symlink(&target, &path).unwrap();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let key = [8u8; 32];
+        let sealed = crypto::encrypt_aes_v2(b"downloaded plaintext", &key).unwrap();
+        let (url, server) = serve_once("200 OK", sealed);
+        assert!(
+            download(
+                &http,
+                &Ticket {
+                    url,
+                    cipher: Cipher::Gcm
+                },
+                &key,
+                &path
+            )
+            .is_err()
+        );
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), sentinel);
+        assert!(path.is_symlink());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -30,13 +30,12 @@ pub struct Logout;
 
 impl Run for Logout {
     fn run(self, app: &mut App) -> Result<()> {
-        if let Some(mut session) = app.session.take()
-            && let Err(error) = session.rest.execute("vault/logout_v3", &session.session_token, &())
-        {
-            eprintln!("Server logout failed: {error}");
+        if let Some(account) = app.account.take() {
+            let mut session = account.session;
+            if let Err(error) = session.rest.execute("vault/logout_v3", &session.session_token, &()) {
+                eprintln!("Server logout failed: {error}");
+            }
         }
-        app.vault = None;
-        app.cwd = Default::default();
         app.settings.clone_code = None;
         app.settings.save()?;
         eprintln!("Logged out; persistent login on this device has been cleared.");
@@ -54,7 +53,8 @@ impl Run for Whoami {
     fn run(self, app: &mut App) -> Result<()> {
         app.ensure_synced()?;
         let detail = Detail::from(self.verbose);
-        let session = app.session.as_ref().ok_or(Error::NotLoggedIn)?;
+        let account = app.account.as_ref().ok_or(Error::NotLoggedIn)?;
+        let session = &account.session;
         let host = session.rest.host.to_string();
         let center = match host.as_str() {
             h if h.contains("govcloud") => "US GOV",
@@ -92,7 +92,7 @@ impl Run for Whoami {
             }
         }
         if detail == Detail::Full {
-            let vault = app.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
             print!(
                 "{}{}{}",
                 DetailLine("Records", &vault.records.len().to_string()),
@@ -109,7 +109,7 @@ pub struct SyncDown;
 
 impl Run for SyncDown {
     fn run(self, app: &mut App) -> Result<()> {
-        if app.session.is_none() {
+        if app.account.is_none() {
             let user = app.default_user()?;
             app.login(user)
         } else {
@@ -146,7 +146,7 @@ impl Run for ThisDevice {
         let device_key =
             p256::SecretKey::from_slice(&b64_decode(app.settings.private_key.as_deref().ok_or(Error::NotLoggedIn)?)?)?;
         let config_path = app.settings.path.display().to_string();
-        let session = app.session.as_mut().ok_or(Error::NotLoggedIn)?;
+        let session = &mut app.account.as_mut().ok_or(Error::NotLoggedIn)?.session;
         let request = AccountSummaryRequest {
             summary_version: 3,
             ..Default::default()
