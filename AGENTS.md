@@ -37,7 +37,8 @@ targeted tests too:
 ```sh
 cargo make t vault::tests
 cargo make tnc vault::tests
-cargo make t clipboard::tests::uid_titles_and_word_search_honor_login_filtering -- --exact
+cargo make t \
+  clipboard::tests::uid_titles_and_word_search_honor_login_filtering -- --exact
 ```
 
 Use `cargo make r -- --help` to pass arguments to the application. Inspect the
@@ -79,9 +80,31 @@ user's explicit authorization for those side effects.
   state; shared session and vault state belongs in the application context.
   Keep dispatch separate from command behavior. Exceptions need a concrete
   reason, not another hierarchy.
-- Fallible operations return `Result` and preserve useful errors. Do not define
-  domain methods named `unwrap`, such as `Keys::unwrap`, to hide decryption
-  behavior or error handling.
+- Use `Option<T>` only for expected absence or no applicable work, never to
+  represent a failed operation.
+- NEVER discard an error, under any circumstances. Do not use `.ok()`, ignored
+  fallible results, empty `Err` branches, or fallback/default values to hide
+  failures. Recovery, retries, and partial-success operations must retain their
+  errors for the caller and diagnostic reporting.
+- Use `crate::Result<T>` (or the imported crate alias) for fallible in-crate
+  operations. Use the existing `crate::Error`, managed with `thiserror`, rather
+  than ad hoc error types or independently spelling `Result<T, E>`. An external
+  trait or API may require another error type; preserve it when converting into
+  the crate error at that boundary.
+- Preserve original errors and their source chains. Add typed context with
+  `thiserror`'s `#[source]` or `#[from]`; do not flatten an underlying error
+  into a string, replace it with a generic message, or otherwise erase
+  diagnostic information inside the application.
+- Map errors to concise, actionable, non-debug user output only at the outermost
+  CLI boundary. Debug builds and explicitly enabled debug diagnostics must keep
+  the complete error chain and relevant context visible and traceable. Neither
+  output mode may disclose passwords, session tokens, or encryption keys.
+- Avoid `Result<Option<T>, E>` in project-owned APIs. Resolve absence before the
+  fallible operation where possible. If distinct domain outcomes must survive,
+  name those outcomes explicitly rather than nesting generic containers; retain
+  failures as crate errors, not absence.
+- Do not define domain methods named `unwrap`, such as `Keys::unwrap`, to hide
+  decryption behavior or error handling.
 
 ## No forwarding scaffolding
 
