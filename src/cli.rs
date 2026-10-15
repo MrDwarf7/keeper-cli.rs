@@ -174,6 +174,12 @@ pub enum Command {
     /// Upload files to a record
     #[command(name = "upload-attachment", visible_alias = "ua")]
     UploadAttachment(crate::attachment::UploadAttachment),
+    /// Copy a record's password, login, TOTP code or a field to the clipboard
+    #[command(name = "clipboard-copy", visible_alias = "cc")]
+    ClipboardCopy(crate::clipboard::ClipboardCopy),
+    /// Print a record's password (clipboard-copy that defaults to --output stdout)
+    #[command(name = "find-password", mut_arg("output", |arg| arg.default_value("stdout")))]
+    FindPassword(crate::clipboard::ClipboardCopy),
     /// Show this device's login settings, or change them
     #[command(name = "this-device")]
     ThisDevice {

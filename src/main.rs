@@ -1,6 +1,7 @@
 mod attachment;
 mod auth;
 mod cli;
+mod clipboard;
 mod commands;
 mod config;
 mod crypto;
