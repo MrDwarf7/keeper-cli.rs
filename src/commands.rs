@@ -13,7 +13,6 @@ use crate::vault::{self, FolderKind, Record, Vault};
 const MASK: &str = "********";
 const DESCRIPTION_WIDTH: usize = 40;
 
-/// A command's parsed arguments plus the behaviour to run them against the app.
 pub trait Run {
     fn run(self, app: &mut App) -> Result<()>;
 }
