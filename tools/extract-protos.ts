@@ -101,7 +101,9 @@ while (queue.length > 0) {
   // google/protobuf/* well-known types map to prost-types, so neither needs a descriptor here.
   if (file.startsWith("google/")) continue;
   seen.add(file);
-  const fd = unescapePyBytes(readFileSync(`${protoDir}/${file.replace(/\.proto$/, "_pb2.py")}`, "latin1"));
+  if (!file.endsWith(".proto")) throw new Error(`unexpected descriptor filename: ${file}`);
+  const generated = `${file.slice(0, -6)}_pb2.py`;
+  const fd = unescapePyBytes(readFileSync(`${protoDir}/${generated}`, "latin1"));
   const { name, deps } = nameAndDeps(fd);
   if (name !== file) throw new Error(`${file} describes itself as ${name}`);
   set.push(0x0a, ...encodeVarint(fd.length), ...fd);
