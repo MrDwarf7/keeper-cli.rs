@@ -136,16 +136,16 @@ args = ["test", "--all", "${@}", "--", "--nocapture"]
 # END Tests
 
 # START Function outputs
+# Build dependencies also receive ${@}; cargo run already builds its target.
 [tasks.run]
 command = "cargo"
-# We also capture anything after the main command
 args = ["run", "${@}"]
-dependencies = ["build_workspace", "build"]
+dependencies = ["format"]
 
 [tasks.run_release]
 command = "cargo"
 args = ["run", "--release", "${@}"]
-dependencies = ["build_release_workspace", "build_release"]
+dependencies = ["format"]
 
 [tasks.run_as_project]
 command = "cargo"
