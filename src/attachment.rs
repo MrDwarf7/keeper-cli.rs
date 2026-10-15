@@ -169,19 +169,20 @@ impl Attachment {
                     .collect()
             }
             RecordKind::Typed | RecordKind::PamConfiguration => {
-                Ok(record
+                let mut attachments = Vec::new();
+                for uid in record
                     .typed_fields()
                     .find(|field| field.field_type() == "fileRef")
                     .into_iter()
                     .flat_map(|field| field.values())
                     .filter_map(Value::as_str)
-                    .filter_map(|uid| {
-                        uid.parse::<crate::uid::Uid>()
-                            .ok()
-                            .and_then(|uid| vault.records.get(&uid))
-                    })
-                    .filter_map(|file| Self::try_from(file).ok())
-                    .collect())
+                {
+                    let file = vault.records.get(uid.trim_end_matches('='));
+                    if let Some(file) = file {
+                        attachments.push(Self::try_from(file)?);
+                    }
+                }
+                Ok(attachments)
             }
             RecordKind::File { .. } => Ok(vec![Self::try_from(record)?]),
             RecordKind::Application => Ok(Vec::new()),
@@ -232,6 +233,67 @@ fn http_client() -> Result<reqwest::blocking::Client> {
         .build()?)
 }
 
+struct DownloadOperation<'a> {
+    session:  &'a mut Session,
+    vault:    &'a Vault,
+    http:     &'a reqwest::blocking::Client,
+    out_dir:  &'a Path,
+    layout:   Layout,
+    naming:   Naming,
+    names:    &'a [String],
+    saved:    usize,
+    failures: Vec<Error>,
+}
+
+impl DownloadOperation<'_> {
+    fn download_record(&mut self, record: &Record) -> Result<()> {
+        let mut attachments = Attachment::of(self.vault, record)?;
+        attachments
+            .retain(|attachment| self.names.is_empty() || self.names.iter().any(|name| attachment.is_named(name)));
+        if attachments.is_empty() {
+            return Ok(());
+        }
+
+        let dir = destination(self.vault, self.out_dir, self.layout, record);
+        std::fs::create_dir_all(&dir)?;
+        let response = if matches!(&record.kind, RecordKind::Legacy { .. }) {
+            legacy_tickets(self.session, self.vault, record, &attachments)?
+        } else {
+            file_tickets(self.session, &attachments)?
+        };
+        for (index, attachment) in attachments.iter().enumerate() {
+            let ticket = match response.ticket(attachment, index) {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    self.failures.push(error);
+                    continue;
+                }
+            };
+            let name = local_name(attachment, record, self.naming);
+            let path = free_path(&dir, &name, record.uid.as_ref(), &attachment.id);
+            eprintln!("Downloading '{}'", std::path::absolute(&path)?.display());
+            download(self.http, &ticket, &attachment.key, &path)?;
+            self.saved += 1;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self, terminal: Result<()>) -> Result<()> {
+        if let Err(error) = terminal {
+            self.failures.push(error);
+        }
+        if !self.failures.is_empty() {
+            return Err(Error::DownloadBatch {
+                failures: self.failures,
+            });
+        }
+        if self.saved == 0 {
+            eprintln!("No attachments found");
+        }
+        Ok(())
+    }
+}
+
 impl Run for DownloadAttachment {
     fn run(self, app: &mut App) -> Result<()> {
         let out_dir = match self.out_dir {
@@ -253,48 +315,27 @@ impl Run for DownloadAttachment {
         let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
         let session = &mut account.session;
         let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-        let cwd = &account.cwd;
-        let records = select_records(vault, cwd, &self.records, depth);
+        let records = select_records(vault, &account.cwd, &self.records, depth);
         if records.is_empty() {
             return Err(Error::Generic(format!("Record(s) \"{}\" not found", self.records.join(", "))));
         }
         std::fs::create_dir_all(&out_dir)?;
         let http = http_client()?;
-        let (mut saved, mut refused) = (0, 0);
-        for record in records {
-            let mut attachments = Attachment::of(vault, record)?;
-            attachments
-                .retain(|attachment| self.names.is_empty() || self.names.iter().any(|name| attachment.is_named(name)));
-            if attachments.is_empty() {
-                continue;
-            }
-            let dir = destination(vault, &out_dir, layout, record);
-            std::fs::create_dir_all(&dir)?;
-            let tickets = if matches!(&record.kind, RecordKind::Legacy { .. }) {
-                legacy_tickets(session, vault, record, &attachments)?
-            } else {
-                file_tickets(session, &attachments)?
-            };
-            for (attachment, ticket) in attachments.iter().zip(tickets) {
-                let Some(ticket) = ticket else {
-                    eprintln!("Error requesting download URL for file \"{}\"", attachment.id);
-                    refused += 1;
-                    continue;
-                };
-                let name = local_name(attachment, record, naming);
-                let path = free_path(&dir, &name, record.uid.as_ref(), &attachment.id);
-                eprintln!("Downloading '{}'", std::path::absolute(&path)?.display());
-                download(&http, &ticket, &attachment.key, &path)?;
-                saved += 1;
-            }
-        }
-        if refused > 0 {
-            return Err(Error::Generic(format!("{refused} attachment(s) could not be downloaded")));
-        }
-        if saved == 0 {
-            eprintln!("No attachments found");
-        }
-        Ok(())
+        let mut operation = DownloadOperation {
+            session,
+            vault,
+            http: &http,
+            out_dir: &out_dir,
+            layout,
+            naming,
+            names: &self.names,
+            saved: 0,
+            failures: Vec::new(),
+        };
+        let result = records
+            .into_iter()
+            .try_for_each(|record| operation.download_record(record));
+        operation.finish(result)
     }
 }
 
@@ -303,7 +344,7 @@ fn select_records<'v>(vault: &'v Vault, cwd: &Location, specs: &[String], depth:
     for spec in specs {
         if let Some(record) = vault.records.get(spec.as_str()) {
             found.insert(&record.uid, record);
-        } else if let Ok(folder) = Location::try_from(vault.resolve_path(cwd, spec)) {
+        } else if let crate::vault::PathResolution::Full(folder) = vault.resolve_path(cwd, spec) {
             for location in folder_tree(vault, folder, depth) {
                 for record in vault.records_in(&location) {
                     found.insert(&record.uid, record);
@@ -409,8 +450,7 @@ fn free_path(dir: &Path, name: &str, record_uid: &str, file_id: &str) -> PathBuf
     let extension = Path::new(name)
         .extension()
         .and_then(OsStr::to_str)
-        .map(|extension| format!(".{extension}"))
-        .unwrap_or_default();
+        .map_or_else(String::new, |extension| format!(".{extension}"));
     let file_id = last_component(file_id).unwrap_or("file");
     let candidates = [record_uid, file_id];
     for suffix in candidates {
@@ -429,33 +469,76 @@ fn free_path(dir: &Path, name: &str, record_uid: &str, file_id: &str) -> PathBuf
     }
 }
 
-fn file_tickets(session: &mut Session, attachments: &[Attachment]) -> Result<Vec<Option<Ticket>>> {
+enum DownloadResponse {
+    Files(FilesGetResponse),
+    Legacy(Value),
+}
+
+impl DownloadResponse {
+    fn ticket(&self, attachment: &Attachment, index: usize) -> Result<Ticket> {
+        let context = |detail: &str| format!("attachment {} {detail}", attachment.id);
+        let invalid = |detail: &str| Error::Generic(context(detail));
+        match self {
+            Self::Files(response) => {
+                let uid = b64_decode(&attachment.id).map_err(|error| {
+                    Error::Context {
+                        context: context("has an invalid file UID"),
+                        source:  Box::new(error),
+                    }
+                })?;
+                let file = response
+                    .files
+                    .iter()
+                    .find(|file| file.record_uid == uid)
+                    .ok_or_else(|| invalid("is missing from the download response"))?;
+                if file.status != FileGetResult::FgSuccess as i32 {
+                    return Err(invalid(&format!("was refused with status {}", file.status)));
+                }
+                if file.url.is_empty() {
+                    return Err(invalid(&format!("has malformed grant data (status {})", file.status)));
+                }
+
+                Ok(Ticket {
+                    url:    file.url.clone(),
+                    cipher: file.file_key_type.into(),
+                })
+            }
+            Self::Legacy(response) => {
+                let grant = response["downloads"]
+                    .as_array()
+                    .and_then(|downloads| downloads.get(index))
+                    .ok_or_else(|| invalid("is missing from the positional download response"))?;
+                let Some(url) = grant.get("url").and_then(Value::as_str).filter(|url| !url.is_empty()) else {
+                    return Err(invalid("was refused or has malformed positional grant data"));
+                };
+                Ok(Ticket {
+                    url:    url.to_owned(),
+                    cipher: Cipher::Cbc,
+                })
+            }
+        }
+    }
+}
+
+fn file_tickets(session: &mut Session, attachments: &[Attachment]) -> Result<DownloadResponse> {
     let rq = FilesGetRequest {
         record_uids: attachments
             .iter()
-            .map(|attachment| b64_decode(&attachment.id))
+            .map(|attachment| {
+                b64_decode(&attachment.id).map_err(|error| {
+                    Error::Context {
+                        context: format!("decoding file UID {}", attachment.id),
+                        source:  Box::new(error),
+                    }
+                })
+            })
             .collect::<Result<_>>()?,
         ..Default::default()
     };
     let body = session
         .rest
         .execute("vault/files_download", &session.session_token, &rq)?;
-    let rs = FilesGetResponse::decode(body.as_slice())?;
-    Ok(rq
-        .record_uids
-        .iter()
-        .map(|uid| {
-            rs.files
-                .iter()
-                .find(|file| file.record_uid == *uid && file.status == FileGetResult::FgSuccess as i32)
-                .map(|file| {
-                    Ticket {
-                        url:    file.url.clone(),
-                        cipher: file.file_key_type.into(),
-                    }
-                })
-        })
-        .collect())
+    Ok(DownloadResponse::Files(FilesGetResponse::decode(body.as_slice())?))
 }
 
 fn legacy_tickets(
@@ -463,7 +546,7 @@ fn legacy_tickets(
     vault: &Vault,
     record: &Record,
     attachments: &[Attachment],
-) -> Result<Vec<Option<Ticket>>> {
+) -> Result<DownloadResponse> {
     let mut rq = serde_json::json!({
         "command": "request_download",
         "file_ids": attachments.iter().map(|attachment| attachment.id.as_str()).collect::<Vec<_>>(),
@@ -471,17 +554,7 @@ fn legacy_tickets(
     if let Some(folder) = access_folder(vault, record) {
         rq["shared_folder_uid"] = folder.into();
     }
-    let rs = session.execute_v2(rq)?;
-    let downloads = rs["downloads"].as_array().map_or(&[][..], Vec::as_slice);
-    Ok((0..attachments.len())
-        .map(|index| {
-            let url = downloads.get(index)?.get("url")?.as_str()?;
-            Some(Ticket {
-                url:    url.to_owned(),
-                cipher: Cipher::Cbc,
-            })
-        })
-        .collect())
+    Ok(DownloadResponse::Legacy(session.execute_v2(rq)?))
 }
 
 fn access_folder<'v>(vault: &'v Vault, record: &Record) -> Option<&'v str> {
@@ -502,9 +575,19 @@ fn download(http: &reqwest::blocking::Client, ticket: &Ticket, key: &[u8], path:
         return Err(Error::Generic(format!("HTTP status code {}", response.status().as_u16())));
     }
     let mut body = Vec::new();
-    if let Some(len) = response.content_length().and_then(|len| usize::try_from(len).ok()) {
-        body.try_reserve_exact(len)
-            .map_err(|_| Error::Generic(format!("a {len} byte file does not fit in memory")))?;
+    if let Some(len) = response.content_length() {
+        let len = usize::try_from(len).map_err(|error| {
+            Error::Context {
+                context: format!("download size for {}", path.display()),
+                source:  Box::new(Error::Integer(error)),
+            }
+        })?;
+        body.try_reserve_exact(len).map_err(|error| {
+            Error::Context {
+                context: format!("reserving {len} bytes for {}", path.display()),
+                source:  Box::new(Error::Allocation(error)),
+            }
+        })?;
     }
     response.read_to_end(&mut body)?;
     let plain = ticket.cipher.open(&mut body, key)?;
@@ -512,9 +595,17 @@ fn download(http: &reqwest::blocking::Client, ticket: &Ticket, key: &[u8], path:
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|error| Error::Generic(format!("{}: {error}", path.display())))?;
+        .map_err(|error| {
+            Error::Context {
+                context: format!("creating {}", path.display()),
+                source:  Box::new(error.into()),
+            }
+        })?;
     if let Err(error) = file.write_all(plain) {
-        return Err(Error::Generic(format!("{}: {error} (partial file may remain)", path.display())));
+        return Err(Error::Context {
+            context: format!("writing {} (partial file may remain)", path.display()),
+            source:  Box::new(error.into()),
+        });
     }
     Ok(())
 }
@@ -562,9 +653,12 @@ impl TryFrom<&UploadFile> for Vec<u8> {
             .checked_add(16)
             .ok_or_else(|| Error::Generic(format!("{} does not fit in memory", file.local.name)))?;
         let mut frame = vec![0; 12];
-        frame
-            .try_reserve_exact(reserve)
-            .map_err(|_| Error::Generic(format!("{} does not fit in memory", file.local.name)))?;
+        frame.try_reserve_exact(reserve).map_err(|error| {
+            Error::Context {
+                context: format!("reserving upload data for {}", file.local.path.display()),
+                source:  Box::new(Error::Allocation(error)),
+            }
+        })?;
         std::fs::File::open(&file.local.path)?.read_to_end(&mut frame)?;
         frame.extend_from_slice(&[0; 16]);
         crypto::encrypt_aes_v2_in_place(&mut frame, &file.key)?;
@@ -577,17 +671,25 @@ impl TryFrom<&UserPath> for LocalFile {
 
     fn try_from(typed: &UserPath) -> Result<Self> {
         let path = std::path::absolute(typed)?;
-        let size = path
-            .metadata()
-            .ok()
-            .filter(|metadata| metadata.is_file())
-            .and_then(|metadata| usize::try_from(metadata.len()).ok())
-            .ok_or_else(|| Error::Generic(format!("File \"{}\" does not exist", typed.0.display())))?;
+        let metadata = path.metadata().map_err(|error| {
+            Error::Context {
+                context: format!("reading metadata for {}", typed.0.display()),
+                source:  Box::new(error.into()),
+            }
+        })?;
+        if !metadata.is_file() {
+            return Err(Error::Generic(format!("File \"{}\" is not a regular file", typed.0.display())));
+        }
+        let size = usize::try_from(metadata.len()).map_err(|error| {
+            Error::Context {
+                context: format!("file size for {}", typed.0.display()),
+                source:  Box::new(Error::Integer(error)),
+            }
+        })?;
         Ok(Self {
             name: path
                 .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
             mime: MimeType::from(path.as_path()),
             path,
             size,
@@ -855,14 +957,22 @@ mod tests {
         let mut parent = record(
             "PARENT",
             RecordKind::Typed,
-            json!({"title": "Server", "fields": [{"type": "fileRef", "value": [f1.uid.to_string(), "GONE", other.uid.to_string(), f2.uid.to_string()]}]}),
+            json!({"title": "Server", "fields": [{"type": "fileRef", "value": [f1.uid.to_string(), "GONE", f2.uid.to_string()]}]}),
             1,
         );
         parent.uid = parent_uid.clone();
+        let malformed_ref = record(
+            "BADREF",
+            RecordKind::Typed,
+            json!({"fields": [{"type": "fileRef", "value": [other.uid.to_string()]}]}),
+            1,
+        );
         let vault = vault_of([parent, f1, f2, other]);
         let found = Attachment::of(&vault, &vault.records[&parent_uid]).unwrap();
         assert_eq!(found.iter().map(|file| file.name.as_str()).collect::<Vec<_>>(), ["a.txt", "b.bin"]);
         assert_eq!(found[0].key, key(2));
+
+        assert!(Attachment::of(&vault, &malformed_ref).is_err());
         assert_eq!(
             Attachment::of(&vault, &vault.records[&Uid::from(b"F2".as_slice())])
                 .unwrap()
@@ -971,6 +1081,66 @@ mod tests {
     }
 
     #[test]
+    fn download_responses_resolve_mixed_grants_and_keep_attachment_ids() {
+        let ids = ["ONE", "TWO", "THREE"].map(|bytes| Uid::from(bytes.as_bytes()).to_string());
+        let attachments = ids.each_ref().map(|id| {
+            Attachment {
+                id:    id.as_str().to_owned(),
+                name:  String::new(),
+                title: String::new(),
+                key:   key(0),
+            }
+        });
+        let files = DownloadResponse::Files(FilesGetResponse {
+            files: vec![
+                crate::proto::records::FileGetStatus {
+                    record_uid: b64_decode(&ids[1]).unwrap(),
+                    status: 91,
+                    ..Default::default()
+                },
+                crate::proto::records::FileGetStatus {
+                    record_uid: b64_decode(&ids[0]).unwrap(),
+                    status: FileGetResult::FgSuccess as i32,
+                    url: "https://example.invalid/one".into(),
+                    file_key_type: RecordKeyType::EncryptedByDataKey as i32,
+                    ..Default::default()
+                },
+            ],
+        });
+        assert_eq!(files.ticket(&attachments[0], 0).unwrap().url, "https://example.invalid/one");
+        for attachment in &attachments[1..] {
+            let message = format!("{:?}", files.ticket(attachment, 1).err().unwrap());
+            assert!(message.contains(&attachment.id), "{message}");
+        }
+
+        let legacy = DownloadResponse::Legacy(json!({
+            "downloads": [{"url": "https://example.invalid/one"}, {"url": ""}]
+        }));
+        assert_eq!(legacy.ticket(&attachments[0], 0).unwrap().url, "https://example.invalid/one");
+        for (index, attachment) in attachments.iter().enumerate().skip(1) {
+            let message = format!("{:?}", legacy.ticket(attachment, index).err().unwrap());
+            assert!(message.contains(&attachment.id), "{message}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_file_preserves_symlink_loop_stat_error() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir();
+        let loop_path = dir.join("loop");
+        symlink(&loop_path, &loop_path).unwrap();
+        let expected = std::fs::metadata(&loop_path).unwrap_err().kind();
+        let error = LocalFile::try_from(&UserPath(loop_path)).err().unwrap();
+        assert!(matches!(
+            error,
+            Error::Context { source, .. } if matches!(source.as_ref(), Error::Io(error) if error.kind() == expected)
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn tilde_expands_only_as_a_whole_leading_path_component() {
         let home = dirs::home_dir().unwrap();
         let path = |typed: &str| UserPath::from_str(typed).unwrap().0;
@@ -994,8 +1164,14 @@ mod tests {
                 .to_string(),
             ""
         );
-        assert!(LocalFile::try_from(&UserPath(dir.join("missing.bin"))).is_err());
-        assert!(LocalFile::try_from(&UserPath(dir.clone())).is_err());
+        assert!(matches!(
+            LocalFile::try_from(&UserPath(dir.clone())),
+            Err(Error::Generic(message)) if message.contains("not a regular file")
+        ));
+        assert!(matches!(
+            LocalFile::try_from(&UserPath(dir.join("missing.bin"))),
+            Err(Error::Context { source, .. }) if matches!(*source, Error::Io(_))
+        ));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
