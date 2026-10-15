@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::commands::{App, Run};
 use crate::prelude::*;
 use crate::totp::Totp;
-use crate::vault::{Location, Record, RecordKind, Vault};
+use crate::vault::{Location, Record, RecordKind, Secrets, Vault};
 
 /// Copy a record's password, login, TOTP code, UID or a field to the clipboard.
 #[derive(Args, Debug)]
@@ -154,10 +154,10 @@ fn field_text(record: &Record, spec: &str) -> Option<String> {
     let (name, property) = spec.rsplit_once(':').unwrap_or((spec, ""));
     if matches!(&record.kind, RecordKind::Legacy { .. }) {
         return record
-            .display_fields()
+            .display_fields(Secrets::Revealed)
             .into_iter()
             .find(|field| field.label.eq_ignore_ascii_case(name))
-            .map(|field| field.value);
+            .map(|field| String::from(field.value));
     }
     let (kind, label) = name.split_once('.').unwrap_or((name, ""));
     let field = record
@@ -416,6 +416,23 @@ mod tests {
         }
         let emailed = typed("MAIL", "Mail", json!([{"type": "email", "value": ["me@example.com"]}]));
         assert_eq!(login(&emailed), Some("me@example.com"));
+    }
+
+    #[test]
+    fn legacy_custom_secret_field_clipboard_extraction_reveals_raw_value() {
+        let old = record(
+            "OLD-SECRET",
+            RecordKind::Legacy { extra: None },
+            json!({"title": "Legacy secret", "secret1": "admin", "custom": [{"name": "Recovery code", "value": "raw-code-123"}]}),
+        );
+
+        let masked = old
+            .display_fields(Secrets::Masked)
+            .into_iter()
+            .find(|field| field.label == "Recovery code")
+            .unwrap();
+        assert_eq!(masked.value, "********");
+        assert_eq!(field_text(&old, "Recovery code").as_deref(), Some("raw-code-123"));
     }
 
     #[test]

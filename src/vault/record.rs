@@ -60,25 +60,10 @@ impl From<bool> for Secrets {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Sensitivity {
-    Plain,
-    Secret,
-}
-
-pub struct DisplayField {
-    pub label:       String,
-    pub value:       String,
-    pub sensitivity: Sensitivity,
-}
-
-impl DisplayField {
-    pub fn shown(&self, secrets: Secrets) -> &str {
-        match (self.sensitivity, secrets) {
-            (Sensitivity::Secret, Secrets::Masked) => "********",
-            _ => &self.value,
-        }
-    }
+#[derive(Debug)]
+pub struct DisplayField<'a> {
+    pub label: std::borrow::Cow<'a, str>,
+    pub value: std::borrow::Cow<'a, str>,
 }
 
 impl Record {
@@ -207,16 +192,14 @@ impl Record {
         String::new()
     }
 
-    /// Labelled values for display and search.
-    pub fn display_fields(&self) -> Vec<DisplayField> {
-        let field = |label: &str, value: Option<&str>, sensitivity| {
-            DisplayField {
-                label: label.to_owned(),
-                value: value.unwrap_or_default().to_owned(),
-                sensitivity,
+    pub fn display_fields<'a>(&'a self, secrets: Secrets) -> Vec<DisplayField<'a>> {
+        let secret_value = |value: &'a str| -> std::borrow::Cow<'a, str> {
+            match secrets {
+                Secrets::Masked => std::borrow::Cow::Borrowed("********"),
+                Secrets::Revealed => value.into(),
             }
         };
-        let fields = match &self.kind {
+        match &self.kind {
             RecordKind::Legacy { .. } => {
                 let custom = self
                     .data
@@ -224,53 +207,85 @@ impl Record {
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
-                    .map(|c| {
-                        let get = |k: &str| c.get(k).and_then(Value::as_str);
-                        field(get("name").unwrap_or_default(), get("value"), Sensitivity::Secret)
+                    .filter_map(|field| {
+                        let value = field
+                            .get("value")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.is_empty())?;
+                        Some(DisplayField {
+                            label: field.get("name").and_then(Value::as_str).unwrap_or_default().into(),
+                            value: secret_value(value),
+                        })
                     });
                 [
-                    field("Login", self.login(), Sensitivity::Plain),
-                    field("Password", self.password(), Sensitivity::Secret),
-                    field("URL", self.url(), Sensitivity::Plain),
-                    field("TOTP URL", self.totp_url(), Sensitivity::Secret),
+                    ("Login", self.login().map(std::borrow::Cow::from)),
+                    ("Password", self.password().map(secret_value)),
+                    ("URL", self.url().map(std::borrow::Cow::from)),
+                    ("TOTP URL", self.totp_url().map(secret_value)),
                 ]
                 .into_iter()
+                .filter_map(|(label, value)| {
+                    value.map(|value| {
+                        DisplayField {
+                            label: label.into(),
+                            value,
+                        }
+                    })
+                })
                 .chain(custom)
-                .collect::<Vec<_>>()
+                .collect()
             }
             RecordKind::File { .. } => {
-                vec![
-                    field("Name", self.str_field("name"), Sensitivity::Plain),
-                    field("MIME Type", self.str_field("type"), Sensitivity::Plain),
-                    field(
+                [
+                    ("Name", self.str_field("name").map(std::borrow::Cow::from)),
+                    ("MIME Type", self.str_field("type").map(std::borrow::Cow::from)),
+                    (
                         "Size",
                         self.data
                             .get("size")
                             .and_then(Value::as_u64)
-                            .map(|s| format!("{s} bytes"))
-                            .as_deref(),
-                        Sensitivity::Plain,
+                            .map(|size| format!("{size} bytes").into()),
                     ),
                 ]
+                .into_iter()
+                .filter_map(|(label, value)| {
+                    value.map(|value| {
+                        DisplayField {
+                            label: label.into(),
+                            value,
+                        }
+                    })
+                })
+                .collect()
             }
             _ => {
                 self.typed_fields()
-                    .map(|f| {
-                        DisplayField {
-                            label:       f.label(),
-                            value:       f
-                                .values()
+                    .filter_map(|field| {
+                        let mut values = field.values().filter(|value| !render_value_is_empty(value)).peekable();
+                        let first = values.next()?;
+                        let value = if field.is_sensitive() && secrets == Secrets::Masked {
+                            "********".into()
+                        } else if values.peek().is_none() {
+                            match first {
+                                Value::String(value) => value.as_str().into(),
+                                value => render_value(value).into(),
+                            }
+                        } else {
+                            std::iter::once(first)
+                                .chain(values)
                                 .map(render_value)
-                                .filter(|v| !v.is_empty())
                                 .collect::<Vec<_>>()
-                                .join(", "),
-                            sensitivity: f.sensitivity(),
-                        }
+                                .join(", ")
+                                .into()
+                        };
+                        Some(DisplayField {
+                            label: field.label(),
+                            value,
+                        })
                     })
                     .collect()
             }
-        };
-        fields.into_iter().filter(|f| !f.value.is_empty()).collect()
+        }
     }
 
     /// All-tokens, case-insensitive substring match over UID, title, type and field text,
@@ -280,11 +295,11 @@ impl Record {
             return true;
         }
         let mut haystack = format!("{} {} {} {}", self.uid, self.title(), self.record_type(), self.notes());
-        for f in self.display_fields() {
+        for f in self.display_fields(Secrets::Revealed) {
             haystack.push(' ');
-            haystack.push_str(&f.label);
+            haystack.push_str(f.label.as_ref());
             haystack.push(' ');
-            haystack.push_str(&f.value);
+            haystack.push_str(f.value.as_ref());
         }
         let haystack = haystack.to_lowercase();
         tokens.iter().all(|t| haystack.contains(&t.to_lowercase()))
@@ -307,15 +322,15 @@ impl<'a> TypedField<'a> {
         })
     }
 
-    pub fn label(&self) -> String {
+    pub fn label(&self) -> std::borrow::Cow<'a, str> {
         match self.0.get("label").and_then(Value::as_str).filter(|l| !l.is_empty()) {
-            Some(l) => l.to_owned(),
-            None => FieldTypeLabel(self.field_type()).to_string(),
+            Some(label) => label.into(),
+            None => FieldTypeLabel(self.field_type()).to_string().into(),
         }
     }
 
-    fn sensitivity(&self) -> Sensitivity {
-        let secret_type = matches!(
+    fn is_sensitive(&self) -> bool {
+        matches!(
             self.field_type(),
             "password"
                 | "secret"
@@ -329,12 +344,7 @@ impl<'a> TypedField<'a> {
                 | "bankAccount"
                 | "note"
                 | "json"
-        );
-        if secret_type || self.0.get("privacyScreen").and_then(Value::as_bool).unwrap_or(false) {
-            Sensitivity::Secret
-        } else {
-            Sensitivity::Plain
-        }
+        ) || self.0.get("privacyScreen").and_then(Value::as_bool).unwrap_or(false)
     }
 }
 
@@ -381,6 +391,15 @@ fn render_value(v: &Value) -> String {
     }
 }
 
+fn render_value_is_empty(v: &Value) -> bool {
+    match v {
+        Value::String(value) => value.is_empty(),
+        Value::Null => true,
+        Value::Object(map) => map.values().all(render_value_is_empty),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -416,11 +435,28 @@ mod tests {
         assert_eq!(r.totp_url(), Some("otpauth://totp/x?secret=AAAA"));
         assert!(r.matches(&["BOB".into(), "pin".into()]));
         assert!(!r.matches(&["bob".into(), "nope".into()]));
-        let password = r.display_fields().into_iter().find(|f| f.label == "Password").unwrap();
-        assert_eq!(password.shown(Secrets::Masked), "********");
-        assert_eq!(password.shown(Secrets::Revealed), "pw");
-        let custom = r.display_fields().into_iter().find(|f| f.label == "PIN").unwrap();
-        assert_eq!(custom.shown(Secrets::Masked), "********");
+        assert!(r.matches(&["1234".into()]));
+        assert!(r.matches(&["pw".into()]));
+        let password = r
+            .display_fields(Secrets::Masked)
+            .into_iter()
+            .find(|f| f.label == "Password")
+            .unwrap();
+        assert_eq!(format!("{}", password.value), "********");
+        assert_eq!(serde_json::to_string(&password.value).unwrap(), "\"********\"");
+        let password = r
+            .display_fields(Secrets::Revealed)
+            .into_iter()
+            .find(|f| f.label == "Password")
+            .unwrap();
+        assert_eq!(format!("{}", password.value), "pw");
+        assert_eq!(serde_json::to_string(&password.value).unwrap(), "\"pw\"");
+        let custom = r
+            .display_fields(Secrets::Masked)
+            .into_iter()
+            .find(|f| f.label == "PIN")
+            .unwrap();
+        assert_eq!(custom.value.as_ref(), "********");
     }
 
     #[test]
@@ -460,15 +496,54 @@ mod tests {
                 {"type": "paymentCard", "value": {"cardNumber": "4111111111111111"}},
                 {"type": "bankAccount", "value": "account"},
                 {"type": "note", "value": "private"},
-                {"type": "json", "value": "{\"secret\":true}"}
+                {"type": "json", "value": "{\"secret\":true}"},
+                {"type": "text", "privacyScreen": true, "value": "screen secret"}
             ]}),
         );
-        assert_eq!(r.login(), Some("alice"));
-        let fields = r.display_fields();
-        for label in ["Password", "Payment Card", "Bank Account", "Note", "Json"] {
-            let field = fields.iter().find(|field| field.label == label).unwrap();
-            assert_eq!(field.shown(Secrets::Masked), "********");
-            assert_eq!(field.shown(Secrets::Revealed), field.value.as_str());
+        let fields = r.display_fields(Secrets::Masked);
+        for label in ["Password", "Payment Card", "Bank Account", "Note", "Json", "Text"] {
+            let field = fields.iter().find(|field| field.label.as_ref() == label).unwrap();
+            assert_eq!(field.value.as_ref(), "********");
         }
+        assert!(r.matches(&["4111111111111111".into()]));
+        assert_eq!(
+            r.display_fields(Secrets::Revealed)
+                .iter()
+                .find(|field| field.label.as_ref() == "Password")
+                .unwrap()
+                .value
+                .as_ref(),
+            "pass"
+        );
+    }
+    #[test]
+    fn empty_fields_are_omitted_and_multiple_values_keep_their_order() {
+        let r = record(
+            RecordKind::Typed,
+            serde_json::json!({"fields": [
+                {"type": "text", "value": ["", null, {}, {"empty": null}, "first", "second"]},
+                {"type": "password", "value": ["", null]}
+            ]}),
+        );
+        for secrets in [Secrets::Masked, Secrets::Revealed] {
+            let fields = r.display_fields(secrets);
+            assert_eq!(fields.iter().map(|field| field.label.as_ref()).collect::<Vec<_>>(), ["Text"]);
+            assert_eq!(fields[0].value.as_ref(), "first, second");
+        }
+    }
+    #[test]
+    fn file_details_include_formatted_size() {
+        let r = record(
+            RecordKind::File { size: 4096 },
+            serde_json::json!({"name": "report.pdf", "type": "application/pdf", "size": 4096}),
+        );
+        let fields = r.display_fields(Secrets::Masked);
+        assert_eq!(
+            fields
+                .into_iter()
+                .map(|field| field.value.into_owned())
+                .collect::<Vec<_>>(),
+            ["report.pdf", "application/pdf", "4096 bytes"]
+        );
     }
 }

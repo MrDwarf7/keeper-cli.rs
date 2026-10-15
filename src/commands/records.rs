@@ -341,11 +341,12 @@ fn show_record(
     secrets: Secrets,
     format: DetailFormat,
 ) -> crate::Result<()> {
+    let fields = record.display_fields(secrets);
     match format {
         DetailFormat::Json => {
             let body = serde_json::json!({
                 "record_uid": record.uid.to_string(), "type": record.record_type(), "title": record.title(),
-                "fields": record.display_fields().iter().map(|field| serde_json::json!({"label": field.label, "value": field.shown(secrets)})).collect::<Vec<_>>(),
+                "fields": fields.iter().map(|field| serde_json::json!({"label": field.label, "value": field.value})).collect::<Vec<_>>(),
                 "notes": record.notes(), "shared": record.shared, "revision": record.revision,
                 "client_modified_time": record.client_modified_time,
                 "udata": record.udata,
@@ -358,8 +359,8 @@ fn show_record(
             print!("{}", DetailLine("UID", record.uid.as_ref()));
             print!("{}", DetailLine("Type", record.record_type()));
             print!("{}", DetailLine("Title", record.title()));
-            for field in record.display_fields() {
-                print!("{}", DetailLine(&field.label, field.shown(secrets)));
+            for field in fields {
+                print!("{}", DetailLine(&field.label, field.value.as_ref()));
             }
             if !record.notes().is_empty() {
                 print!("{}", DetailLine("Notes", record.notes()));

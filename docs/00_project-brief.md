@@ -19,6 +19,11 @@ slash in a folder name. Resolution returns `PathResolution::Full` or `Partial`.
 Operating-system path components normalize those separators, so filesystem path
 parsing is not interchangeable.
 
+Presented field values use `std::borrow::Cow<str>` and already contain only the
+text allowed by the disclosure policy. Masked views retain replacement text, not
+the source secret. Formatting and JSON serialization use standard trait support;
+search and clipboard lookup explicitly request revealed values.
+
 Protocol behavior is derived from descriptors embedded in Commander's generated
 Python modules and from Commander's source.
 
