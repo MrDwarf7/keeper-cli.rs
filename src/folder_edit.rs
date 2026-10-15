@@ -170,7 +170,7 @@ impl Run for Mkdir {
             }
         };
         let base = Place::from(vault.folders.get(&parent));
-        let home = realm(vault, base)?;
+        let home = Realm::try_from((vault, base))?;
         let kind = match (wanted, home) {
             (Wanted::Shared(_), Realm::Shared { .. }) => {
                 return Err(Error::Generic("mkdir: Shared folders cannot be nested".into()));
@@ -842,7 +842,7 @@ impl TryFrom<&Relocation<'_>> for Request {
             sources,
             share,
         } = *plan;
-        let into = realm(vault, dst)?;
+        let into = Realm::try_from((vault, dst))?;
         // Sharing flags only mean something for records landing in a shared folder.
         let share = match into {
             Realm::Shared { .. } => share,
@@ -867,7 +867,7 @@ impl TryFrom<&Relocation<'_>> for Request {
                     });
                     // A shared folder keeps its own key wherever it is filed.
                     if folder.kind != FolderKind::SharedFolder
-                        && let Some(wrapper) = realm(vault, Place::In(folder))?.rewrap(into, data_key)
+                        && let Some(wrapper) = Realm::try_from((vault, Place::In(folder)))?.rewrap(into, data_key)
                     {
                         for member in PostOrder::new(vault, folder) {
                             if member.kind == FolderKind::SharedFolder {
@@ -895,7 +895,7 @@ impl TryFrom<&Relocation<'_>> for Request {
                         origin: from.into(),
                         share,
                     });
-                    if let Some(wrapper) = realm(vault, from)?.rewrap(into, data_key) {
+                    if let Some(wrapper) = Realm::try_from((vault, from))?.rewrap(into, data_key) {
                         transition_keys.push(TransitionKey::try_from((record, wrapper))?);
                     }
                 }
@@ -1032,22 +1032,26 @@ enum Realm<'a> {
     Shared { uid: &'a str, key: &'a [u8] },
 }
 
-fn realm<'a>(vault: &'a Vault, place: Place<'a>) -> Result<Realm<'a>> {
-    let Place::In(folder) = place else {
-        return Ok(Realm::Private);
-    };
-    if folder.kind == FolderKind::User {
-        return Ok(Realm::Private);
-    }
-    let uid = folder.shared_folder_uid.as_deref().unwrap_or(&folder.uid);
-    match vault.shared_folders.get(uid) {
-        Some(shared) if !shared.key.is_empty() => {
-            Ok(Realm::Shared {
-                uid: &shared.uid,
-                key: &shared.key,
-            })
+impl<'a> TryFrom<(&'a Vault, Place<'a>)> for Realm<'a> {
+    type Error = Error;
+
+    fn try_from((vault, place): (&'a Vault, Place<'a>)) -> Result<Self> {
+        let Place::In(folder) = place else {
+            return Ok(Self::Private);
+        };
+        if folder.kind == FolderKind::User {
+            return Ok(Self::Private);
         }
-        _ => Err(Error::Generic(format!("The key of shared folder {uid} is not available"))),
+        let uid = folder.shared_folder_uid.as_deref().unwrap_or(&folder.uid);
+        match vault.shared_folders.get(uid) {
+            Some(shared) if !shared.key.is_empty() => {
+                Ok(Self::Shared {
+                    uid: &shared.uid,
+                    key: &shared.key,
+                })
+            }
+            _ => Err(Error::Generic(format!("The key of shared folder {uid} is not available"))),
+        }
     }
 }
 
@@ -1131,6 +1135,15 @@ enum Case {
     Ignore,
 }
 
+impl Case {
+    fn fold(self, text: &str) -> Vec<char> {
+        match self {
+            Self::Exact => text.chars().collect(),
+            Self::Ignore => text.chars().flat_map(char::to_lowercase).collect(),
+        }
+    }
+}
+
 /// An `fnmatch`-style pattern that has to match a whole name.
 // ponytail: `*` and `?` only; `[seq]` classes match literally. Add them if a real pattern needs them.
 struct Glob {
@@ -1141,20 +1154,13 @@ struct Glob {
 impl Glob {
     fn new(pattern: &str, case: Case) -> Self {
         Self {
-            pattern: chars(pattern, case),
+            pattern: case.fold(pattern),
             case,
         }
     }
 
     fn is_match(&self, text: &str) -> bool {
-        glob_match(&self.pattern, &chars(text, self.case))
-    }
-}
-
-fn chars(text: &str, case: Case) -> Vec<char> {
-    match case {
-        Case::Exact => text.chars().collect(),
-        Case::Ignore => text.chars().flat_map(char::to_lowercase).collect(),
+        glob_match(&self.pattern, &self.case.fold(text))
     }
 }
 
