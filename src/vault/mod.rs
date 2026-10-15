@@ -95,10 +95,12 @@ impl Vault {
     fn resolve_part(&self, at: &Location, part: &str) -> Option<Location> {
         match part {
             "." => Some(at.clone()),
-            ".." => Some(match self.folder(at) {
-                Some(folder) => folder.parent.clone(),
-                None => Location::Root,
-            }),
+            ".." => {
+                Some(match self.folder(at) {
+                    Some(folder) => folder.parent.clone(),
+                    None => Location::Root,
+                })
+            }
             name => {
                 let children = self.subfolders_of(at);
                 let child = children
@@ -126,7 +128,10 @@ impl Vault {
                 path.components.drain(..index);
                 path.anchor = PathAnchor::Current;
                 path.trailing_separator = false;
-                return PathResolution::Partial { parent: at, tail: path };
+                return PathResolution::Partial {
+                    parent: at,
+                    tail:   path,
+                };
             };
             at = next;
         }
@@ -167,7 +172,6 @@ impl Vault {
             .filter(move |(_, uids)| uids.contains(record))
             .map(|(at, _)| at)
     }
-
 }
 
 impl Vault {
@@ -231,7 +235,6 @@ impl Vault {
         self.root_folders = roots;
     }
 }
-
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -297,7 +300,11 @@ pub(crate) mod tests {
                 udata:                None,
             },
         );
-        vault.filed.entry(Location::Folder(uid("BBBB"))).or_default().insert(uid("RRRR"));
+        vault
+            .filed
+            .entry(Location::Folder(uid("BBBB")))
+            .or_default()
+            .insert(uid("RRRR"));
         vault
     }
 
@@ -411,7 +418,9 @@ pub(crate) mod tests {
         assert_eq!(vault.path_of(&deep), "/Work/Data name/Deep");
         let shared_root = Location::Folder(Uid::from(&f_sf[..]));
         assert_eq!(
-            vault.folder(&shared_root).map_or("My Vault", |folder| folder.name.as_str()),
+            vault
+                .folder(&shared_root)
+                .map_or("My Vault", |folder| folder.name.as_str()),
             "Data name"
         );
         assert_eq!(
@@ -462,19 +471,13 @@ pub(crate) mod tests {
         assert_eq!(vault.path_of(&escaped), "/Work/a//b");
         let slash_path = vault.path_of(&Location::Folder(slash_uid.clone()));
         assert_eq!(slash_path, "///leading");
-        assert_eq!(
-            Location::try_from(vault.resolve_path(&root, &slash_path)),
-            Ok(Location::Folder(slash_uid))
-        );
+        assert_eq!(Location::try_from(vault.resolve_path(&root, &slash_path)), Ok(Location::Folder(slash_uid)));
         assert_eq!(
             Location::try_from(vault.resolve_path(&root, "BBBB")),
             Ok(Location::Folder("BBBB".parse().unwrap()))
         );
         let padded_path = format!("{padded_uid}==");
-        assert_eq!(
-            Location::try_from(vault.resolve_path(&root, &padded_path)),
-            Ok(Location::Folder(padded_uid))
-        );
+        assert_eq!(Location::try_from(vault.resolve_path(&root, &padded_path)), Ok(Location::Folder(padded_uid)));
         assert_eq!(Location::try_from(vault.resolve_path(&root, "/")), Ok(Location::Root));
         assert_eq!(
             Location::try_from(vault.resolve_path(&Location::Folder("AAAA".parse().unwrap()), "")),
@@ -488,22 +491,13 @@ pub(crate) mod tests {
         assert_eq!(parent, &Location::Folder("BBBB".parse().unwrap()));
         assert_eq!(tail.to_string(), "missing/a//b");
         assert_eq!(tail.components, ["missing".to_owned(), "a/b".to_owned()]);
+        assert_eq!(Location::try_from(partial), Err(VaultPath::from("missing/a//b")));
         assert_eq!(
-            Location::try_from(partial),
-            Err(VaultPath::from("missing/a//b"))
-        );
-        assert_eq!(
-            Location::try_from(vault.resolve_path(
-                &Location::Folder("AAAA".parse().unwrap()),
-                "../work/infra"
-            )),
+            Location::try_from(vault.resolve_path(&Location::Folder("AAAA".parse().unwrap()), "../work/infra")),
             Ok(Location::Folder("BBBB".parse().unwrap()))
         );
         assert_eq!(vault.resolve_record(&root, "/Work/Infra/DB Admin").unwrap().title(), "DB Admin");
-        assert_eq!(
-            vault.resolve_record(&root, "/Work/Infra/DB Admin/").unwrap().title(),
-            "DB Admin"
-        );
+        assert_eq!(vault.resolve_record(&root, "/Work/Infra/DB Admin/").unwrap().title(), "DB Admin");
     }
 
     #[test]

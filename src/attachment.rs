@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::io::{Read, Write as _};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::str::FromStr;
@@ -223,13 +224,6 @@ struct Ticket {
     cipher: Cipher,
 }
 
-fn connected(app: &mut App) -> Result<(&mut Session, &Vault, Location)> {
-    app.ensure_synced()?;
-    let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-    let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-    Ok((&mut account.session, vault, account.cwd.clone()))
-}
-
 /// Large attachments can legitimately take minutes; only the connection is time-limited.
 fn http_client() -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
@@ -255,8 +249,12 @@ impl Run for DownloadAttachment {
             Naming::Stored
         };
         let depth = if self.recursive { Depth::Subtree } else { Depth::Folder };
-        let (session, vault, cwd) = connected(app)?;
-        let records = select_records(vault, &cwd, &self.records, depth);
+        app.ensure_synced()?;
+        let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+        let session = &mut account.session;
+        let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+        let cwd = &account.cwd;
+        let records = select_records(vault, cwd, &self.records, depth);
         if records.is_empty() {
             return Err(Error::Generic(format!("Record(s) \"{}\" not found", self.records.join(", "))));
         }
@@ -619,9 +617,13 @@ impl NewFile {
 impl Run for UploadAttachment {
     fn run(self, app: &mut App) -> Result<()> {
         let files = self.files.iter().map(LocalFile::try_from).collect::<Result<Vec<_>>>()?;
-        let (session, vault, cwd) = connected(app)?;
+        app.ensure_synced()?;
+        let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
+        let session = &mut account.session;
+        let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+        let cwd = &account.cwd;
         let record = vault
-            .resolve_record(&cwd, &self.record)
+            .resolve_record(cwd, &self.record)
             .ok_or_else(|| Error::Generic(format!("Record UID not found for record \"{}\"", self.record)))?;
         if !matches!(&record.kind, RecordKind::Typed) {
             return Err(Error::Generic(format!(
@@ -710,26 +712,24 @@ fn sealed(file: &LocalFile, key: &[u8]) -> Result<Vec<u8>> {
     Ok(frame)
 }
 
-fn form_framing(parameters: &str, boundary: &str, file_ref: &str) -> Result<(String, String)> {
-    let fields: serde_json::Map<String, Value> = serde_json::from_str(parameters)?;
-    let mut head: String = fields
-        .iter()
-        .map(|(name, value)| {
-            let value = value.as_str().map_or_else(|| value.to_string(), str::to_owned);
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
-        })
-        .collect();
-    head += &format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_ref}\"\r\nContent-Type: \
-         application/octet-stream\r\n\r\n"
-    );
-    Ok((head, format!("\r\n--{boundary}--\r\n")))
-}
-
 fn send(http: &reqwest::blocking::Client, target: &FileAddStatus, file: &LocalFile, new: &NewFile) -> Result<()> {
     let frame = sealed(file, &new.key)?;
     let boundary = data_encoding::HEXLOWER.encode(&crypto::random_bytes(16));
-    let (head, tail) = form_framing(&target.parameters, &boundary, &b64_encode(&new.uid))?;
+    let fields: serde_json::Map<String, Value> = serde_json::from_str(&target.parameters)?;
+    let mut head = String::new();
+    for (name, value) in &fields {
+        let value = value.as_str().map_or_else(|| value.to_string(), str::to_owned);
+        write!(&mut head, "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
+            .expect("writing multipart framing to a String cannot fail");
+    }
+    let file_ref = b64_encode(&new.uid);
+    write!(
+        &mut head,
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_ref}\"\r\nContent-Type: \
+         application/octet-stream\r\n\r\n"
+    )
+    .expect("writing multipart framing to a String cannot fail");
+    let tail = format!("\r\n--{boundary}--\r\n");
     let len = (head.len() + frame.len() + tail.len()) as u64;
     let body = reqwest::blocking::Body::sized(
         std::io::Cursor::new(head.into_bytes())
@@ -1049,10 +1049,15 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    fn serve_once(status: &'static str, reply: Vec<u8>) -> (String, std::thread::JoinHandle<Vec<u8>>) {
+    struct TestServer {
+        url:    String,
+        worker: std::thread::JoinHandle<Vec<u8>>,
+    }
+
+    fn serve_once(status: &'static str, reply: Vec<u8>) -> TestServer {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/blob", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
             listener.set_nonblocking(true).unwrap();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let mut stream = loop {
@@ -1091,9 +1096,8 @@ mod tests {
             stream.write_all(&reply).unwrap();
             request
         });
-        (url, server)
+        TestServer { url, worker }
     }
-
     #[test]
     fn download_http_authenticates_before_writing_plaintext() {
         let dir = temp_dir();
@@ -1105,20 +1109,29 @@ mod tests {
             (Cipher::Gcm, crypto::encrypt_aes_v2(&plain, &key).unwrap()),
             (Cipher::Cbc, crypto::encrypt_cbc::<Pkcs7>(&plain, &key).unwrap()),
         ] {
-            let (url, server) = serve_once("200 OK", sealed);
-            download(&http, &Ticket { url, cipher }, &key, &path).unwrap();
-            let request = String::from_utf8(server.join().unwrap()).unwrap();
+            let server = serve_once("200 OK", sealed);
+            download(
+                &http,
+                &Ticket {
+                    url: server.url.clone(),
+                    cipher,
+                },
+                &key,
+                &path,
+            )
+            .unwrap();
+            let request = String::from_utf8(server.worker.join().unwrap()).unwrap();
             assert!(request.starts_with("GET /blob HTTP/1.1\r\n"));
             assert_eq!(std::fs::read(&path).unwrap(), plain);
             std::fs::remove_file(&path).unwrap();
         }
-        let (url, server) = serve_once("403 Forbidden", b"denied".to_vec());
+        let server = serve_once("403 Forbidden", b"denied".to_vec());
         assert!(
             download(
                 &http,
                 &Ticket {
-                    url,
-                    cipher: Cipher::Gcm
+                    url:    server.url.clone(),
+                    cipher: Cipher::Gcm,
                 },
                 &key,
                 &path
@@ -1127,23 +1140,23 @@ mod tests {
             .to_string()
             .contains("403")
         );
-        server.join().unwrap();
+        server.worker.join().unwrap();
         let mut forged = crypto::encrypt_aes_v2(&plain, &key).unwrap();
         forged[100] ^= 1;
-        let (url, server) = serve_once("200 OK", forged);
+        let server = serve_once("200 OK", forged);
         assert!(
             download(
                 &http,
                 &Ticket {
-                    url,
-                    cipher: Cipher::Gcm
+                    url:    server.url.clone(),
+                    cipher: Cipher::Gcm,
                 },
                 &key,
                 &path
             )
             .is_err()
         );
-        server.join().unwrap();
+        server.worker.join().unwrap();
         assert!(!path.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1157,20 +1170,20 @@ mod tests {
         let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
         let key = [8u8; 32];
         let sealed = crypto::encrypt_aes_v2(b"downloaded plaintext", &key).unwrap();
-        let (url, server) = serve_once("200 OK", sealed);
+        let server = serve_once("200 OK", sealed);
         assert!(
             download(
                 &http,
                 &Ticket {
-                    url,
-                    cipher: Cipher::Gcm
+                    url:    server.url.clone(),
+                    cipher: Cipher::Gcm,
                 },
                 &key,
                 &path
             )
             .is_err()
         );
-        server.join().unwrap();
+        server.worker.join().unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), sentinel);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1189,20 +1202,20 @@ mod tests {
         let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
         let key = [8u8; 32];
         let sealed = crypto::encrypt_aes_v2(b"downloaded plaintext", &key).unwrap();
-        let (url, server) = serve_once("200 OK", sealed);
+        let server = serve_once("200 OK", sealed);
         assert!(
             download(
                 &http,
                 &Ticket {
-                    url,
-                    cipher: Cipher::Gcm
+                    url:    server.url.clone(),
+                    cipher: Cipher::Gcm,
                 },
                 &key,
                 &path
             )
             .is_err()
         );
-        server.join().unwrap();
+        server.worker.join().unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), sentinel);
         assert!(path.is_symlink());
         std::fs::remove_dir_all(dir).unwrap();
@@ -1219,15 +1232,15 @@ mod tests {
             key: key(9),
         };
         let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
-        let (url, server) = serve_once("201 Created", Vec::new());
+        let server = serve_once("201 Created", Vec::new());
         let target = FileAddStatus {
-            url,
+            url: server.url.clone(),
             parameters: r#"{"key":"uploads/abc","policy":"p"}"#.into(),
             success_status_code: 201,
             ..Default::default()
         };
         send(&http, &target, &file, &new).unwrap();
-        let request = server.join().unwrap();
+        let request = server.worker.join().unwrap();
         let head_end = request.windows(4).position(|window| window == b"\r\n\r\n").unwrap() + 4;
         let head = String::from_utf8(request[..head_end].to_vec()).unwrap().to_lowercase();
         let header = |name: &str| {
@@ -1290,15 +1303,15 @@ mod tests {
         assert_eq!(fields.get("policy").map(Vec::as_slice), Some(b"p".as_slice()));
         assert_eq!(crypto::decrypt_aes_v2(encrypted, &new.key).unwrap(), content);
 
-        let (url, server) = serve_once("200 OK", Vec::new());
+        let server = serve_once("200 OK", Vec::new());
         let target = FileAddStatus {
-            url,
+            url: server.url.clone(),
             parameters: "{}".into(),
             success_status_code: 201,
             ..Default::default()
         };
         assert!(send(&http, &target, &file, &new).is_err());
-        server.join().unwrap();
+        server.worker.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

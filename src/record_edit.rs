@@ -794,7 +794,6 @@ fn find(vault: &Vault, cwd: &Location, name: &str) -> Result<Vec<Filing>> {
     }
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Answer {
     Yes,

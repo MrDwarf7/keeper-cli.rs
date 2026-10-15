@@ -104,7 +104,7 @@ impl FromStr for Totp {
 
 impl Totp {
     /// Returns the code for `unix_time` and the seconds it remains valid.
-    pub fn code_at(&self, unix_time: u64) -> Result<Code> {
+    pub fn code_at(&self, unix_time: u64) -> Code {
         let counter = (unix_time / self.period).to_be_bytes();
         let digest = match self.algorithm {
             Algorithm::Sha1 => hmac::<Hmac<Sha1>>(&self.secret, &counter),
@@ -119,10 +119,10 @@ impl Totp {
             digest[offset + 3],
         ]);
         let code = u64::from(binary) % 10u64.pow(self.digits);
-        Ok(Code {
+        Code {
             value:     format!("{code:0width$}", width = self.digits as usize),
             remaining: self.period - unix_time % self.period,
-        })
+        }
     }
 
     pub fn code_now(&self) -> Result<Code> {
@@ -130,7 +130,7 @@ impl Totp {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| Error::Generic(e.to_string()))?
             .as_secs();
-        self.code_at(now)
+        Ok(self.code_at(now))
     }
 }
 
@@ -172,7 +172,7 @@ mod tests {
         for (algorithm, secret, vectors) in cases {
             let totp = url(secret, algorithm).parse::<Totp>().unwrap();
             for (time, expected) in vectors {
-                assert_eq!(totp.code_at(time).unwrap().to_string(), expected, "{algorithm} at {time}");
+                assert_eq!(totp.code_at(time).to_string(), expected, "{algorithm} at {time}");
             }
         }
     }
@@ -182,7 +182,7 @@ mod tests {
         let totp = "otpauth://totp/x?secret=gezdgnbvgy3tqojqgezdgnbvgy3tqojq"
             .parse::<Totp>()
             .unwrap();
-        let code = totp.code_at(59).unwrap();
+        let code = totp.code_at(59);
         assert_eq!(code.to_string().len(), 6);
         assert_eq!(code.remaining, 1);
         assert!("https://example.com".parse::<Totp>().is_err());

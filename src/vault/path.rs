@@ -1,5 +1,4 @@
 use std::convert::Infallible;
-use std::fmt::{self, Write as _};
 use std::str::FromStr;
 
 use super::Location;
@@ -14,8 +13,8 @@ pub enum PathAnchor {
 /// A parsed Commander path. `//` encodes a literal slash inside a component.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VaultPath {
-    pub anchor: PathAnchor,
-    pub components: Vec<String>,
+    pub anchor:             PathAnchor,
+    pub components:         Vec<String>,
     /// Keeps an unescaped final slash distinct from an escaped slash in the last component.
     pub trailing_separator: bool,
 }
@@ -29,7 +28,7 @@ impl From<&str> for VaultPath {
         } else {
             PathAnchor::Current
         };
-        let mut index = if anchor == PathAnchor::Root { 1 } else { 0 };
+        let mut index = usize::from(anchor == PathAnchor::Root);
         let mut components = Vec::new();
         let mut component = String::new();
         let mut trailing_separator = false;
@@ -74,8 +73,8 @@ impl FromStr for VaultPath {
     }
 }
 
-impl fmt::Display for VaultPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for VaultPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.anchor == PathAnchor::Root {
             f.write_str("/")?;
         }

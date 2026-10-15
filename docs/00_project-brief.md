@@ -14,12 +14,13 @@ shell.
 The authenticated account owns its session, cached vault, and current folder as
 one unit, so switching accounts cannot reuse another account's local state.
 
-Vault paths use Commander's `//` escaping for `/` inside folder names; they are
-virtual paths, not operating-system filesystem paths.
+`VaultPath` represents Commander's virtual paths, including `//` for a literal
+slash in a folder name. Resolution returns `PathResolution::Full` or `Partial`.
+Operating-system path components normalize those separators, so filesystem path
+parsing is not interchangeable.
 
-Keeper does not publish `.proto` files or a protocol specification. Protocol
-behavior is derived from descriptors embedded in Commander's generated Python
-modules and from Commander's source.
+Protocol behavior is derived from descriptors embedded in Commander's generated
+Python modules and from Commander's source.
 
 ## Implemented baseline
 

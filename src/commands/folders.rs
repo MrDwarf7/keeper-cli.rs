@@ -48,7 +48,10 @@ impl Run for Ls {
         let mut tail = None;
         let root = match view.vault.resolve_path(view.cwd, &self.pattern) {
             PathResolution::Full(root) => root,
-            PathResolution::Partial { parent, tail: unresolved } => {
+            PathResolution::Partial {
+                parent,
+                tail: unresolved,
+            } => {
                 tail = Some(unresolved.to_string());
                 parent
             }
@@ -202,7 +205,10 @@ impl Run for Tree {
         let view = app.view()?;
         let root = Location::try_from(view.vault.resolve_path(view.cwd, &self.folder))
             .map_err(|_| crate::Error::Generic(format!("Invalid folder path: {}", self.folder)))?;
-        let name = view.vault.folder(&root).map_or("My Vault", |folder| folder.name.as_str());
+        let name = view
+            .vault
+            .folder(&root)
+            .map_or("My Vault", |folder| folder.name.as_str());
         println!("{}", label(name, &root, labels));
         render_tree(view.vault, &root, "", contents, labels);
         Ok(())

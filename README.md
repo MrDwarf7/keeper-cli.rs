@@ -153,9 +153,8 @@ to include them.
 ## Development
 
 ```bash
-cargo build
-cargo test
-cargo run -- --help
+cargo make A
+cargo make r -- --help
 ```
 
 ## License
