@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod crypto;
 mod error;
+mod folder_edit;
 mod generator;
 mod prelude;
 mod proto;
@@ -21,7 +22,7 @@ use crate::commands::App;
 pub use crate::error::{Error, Result};
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(folder_edit::expand_legacy_flags(std::env::args_os()));
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(Error::Cancelled) => ExitCode::from(130),
@@ -63,7 +64,7 @@ fn shell(app: &mut App) -> Result<()> {
         if words.is_empty() {
             continue;
         }
-        let parsed = match ShellLine::try_parse_from(&words) {
+        let parsed = match ShellLine::try_parse_from(folder_edit::expand_legacy_flags(words)) {
             Ok(parsed) => parsed,
             Err(e) => {
                 // Covers --help/help output as well as genuine usage errors.

@@ -13,14 +13,18 @@ use crate::vault::{self, FolderKind, Record, Vault};
 const MASK: &str = "********";
 const DESCRIPTION_WIDTH: usize = 40;
 
+pub trait Run {
+    fn run(self, app: &mut App) -> Result<()>;
+}
+
 pub struct App {
-    pub config: Config,
-    user:       Option<String>,
-    password:   Option<String>,
-    session:    Option<Session>,
-    vault:      Option<Vault>,
+    pub config:         Config,
+    user:               Option<String>,
+    password:           Option<String>,
+    pub(crate) session: Option<Session>,
+    pub(crate) vault:   Option<Vault>,
     /// Current folder UID; `""` is the vault root.
-    pub cwd:    String,
+    pub cwd:            String,
 }
 
 impl App {
@@ -54,7 +58,7 @@ impl App {
         Ok(())
     }
 
-    fn vault(&mut self) -> Result<&Vault> {
+    pub(crate) fn vault(&mut self) -> Result<&Vault> {
         if self.vault.is_none() {
             if self.session.is_none() {
                 self.login(None)?;
@@ -217,6 +221,10 @@ impl App {
                 }
                 Ok(())
             }
+            Command::Mkdir(c) => c.run(self),
+            Command::Rmdir(c) => c.run(self),
+            Command::Rndir(c) => c.run(self),
+            Command::Mv(c) => c.run(self),
             Command::ThisDevice { action } => self.this_device(action),
             Command::Shell | Command::Exit => Ok(()),
         }

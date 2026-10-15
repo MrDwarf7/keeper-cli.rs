@@ -168,6 +168,14 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format:    Format,
     },
+    /// Create a folder
+    Mkdir(crate::folder_edit::Mkdir),
+    /// Remove a folder and its contents
+    Rmdir(crate::folder_edit::Rmdir),
+    /// Rename a folder or change its color
+    Rndir(crate::folder_edit::Rndir),
+    /// Move a record or folder to another folder
+    Mv(crate::folder_edit::Mv),
     /// Show this device's login settings, or change them
     #[command(name = "this-device")]
     ThisDevice {
