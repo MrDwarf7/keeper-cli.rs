@@ -5,8 +5,8 @@
 use aes::Aes256;
 use aes::cipher::block_padding::{NoPadding, Pkcs7};
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::aead::{Aead, AeadInPlace, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use hmac::{Hmac, Mac};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{PublicKey, SecretKey};
@@ -107,6 +107,52 @@ pub fn decrypt_aes_v2(data: &[u8], key: &[u8]) -> Result<Vec<u8>> {
     cipher
         .decrypt(Nonce::from_slice(nonce), body)
         .map_err(|_| crypto_err("AES-GCM decryption failed"))
+}
+
+/// `decrypt_aes_v1` inside the caller's buffer, for attachments large enough that a second copy
+/// matters. Returns the plaintext as a window of `data`.
+pub fn decrypt_aes_v1_in_place<'a>(data: &'a mut [u8], key: &[u8]) -> Result<&'a [u8]> {
+    if data.len() < 32 {
+        return Err(crypto_err("AES-CBC ciphertext too short"));
+    }
+    let (iv, body) = data.split_at_mut(16);
+    let dec = cbc::Decryptor::<Aes256>::new_from_slices(key, iv).map_err(|_| crypto_err("bad AES key length"))?;
+    let plain = dec
+        .decrypt_padded_mut::<Pkcs7>(body)
+        .map_err(|_| crypto_err("AES-CBC decryption failed"))?;
+    Ok(plain)
+}
+
+/// `decrypt_aes_v2` inside the caller's buffer; see [`decrypt_aes_v1_in_place`].
+pub fn decrypt_aes_v2_in_place<'a>(data: &'a mut [u8], key: &[u8]) -> Result<&'a [u8]> {
+    if data.len() < 12 + 16 {
+        return Err(crypto_err("AES-GCM ciphertext too short"));
+    }
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| crypto_err("bad AES key length"))?;
+    let (nonce, rest) = data.split_at_mut(12);
+    let (body, tag) = rest.split_at_mut(rest.len() - 16);
+    cipher
+        .decrypt_in_place_detached(Nonce::from_slice(nonce), b"", body, Tag::from_slice(tag))
+        .map_err(|_| crypto_err("AES-GCM decryption failed"))?;
+    Ok(body)
+}
+
+/// `encrypt_aes_v2` for a buffer laid out as `[12 spare bytes][plaintext][16 spare bytes]`: the
+/// middle is sealed in place and the nonce and tag fill the ends, so a large attachment is never
+/// copied just to be framed.
+pub fn encrypt_aes_v2_in_place(frame: &mut [u8], key: &[u8]) -> Result<()> {
+    if frame.len() < 12 + 16 {
+        return Err(crypto_err("AES-GCM frame too short"));
+    }
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| crypto_err("bad AES key length"))?;
+    let (nonce, rest) = frame.split_at_mut(12);
+    let (body, tag) = rest.split_at_mut(rest.len() - 16);
+    OsRng.fill_bytes(nonce);
+    let sealed = cipher
+        .encrypt_in_place_detached(Nonce::from_slice(nonce), b"", body)
+        .map_err(|_| crypto_err("AES-GCM encryption failed"))?;
+    tag.copy_from_slice(&sealed);
+    Ok(())
 }
 
 pub fn generate_ec_key() -> SecretKey {
@@ -231,6 +277,26 @@ mod tests {
             assert_eq!(v2.len(), 12 + msg.len() + 16);
             assert_eq!(decrypt_aes_v2(&v2, &key).unwrap(), msg);
             assert!(decrypt_aes_v2(&v2, &other).is_err());
+        }
+    }
+
+    #[test]
+    fn in_place_variants_interoperate_with_the_allocating_ones() {
+        let key = random_bytes(32);
+        let other = random_bytes(32);
+        for msg in [&b""[..], b"x", &[7u8; 16], &[9u8; 33]] {
+            let mut v1 = encrypt_aes_v1(msg, &key).unwrap();
+            assert_eq!(decrypt_aes_v1_in_place(&mut v1, &key).unwrap(), msg);
+
+            let mut v2 = encrypt_aes_v2(msg, &key).unwrap();
+            assert!(decrypt_aes_v2_in_place(&mut v2.clone(), &other).is_err());
+            assert_eq!(decrypt_aes_v2_in_place(&mut v2, &key).unwrap(), msg);
+
+            let mut frame = [&[0u8; 12][..], msg, &[0u8; 16]].concat();
+            encrypt_aes_v2_in_place(&mut frame, &key).unwrap();
+            assert_eq!(decrypt_aes_v2(&frame, &key).unwrap(), msg);
+            frame[12] ^= 1;
+            assert!(decrypt_aes_v2_in_place(&mut frame, &key).is_err(), "tampering must fail the tag check");
         }
     }
 
