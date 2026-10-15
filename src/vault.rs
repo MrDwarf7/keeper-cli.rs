@@ -36,6 +36,8 @@ pub struct Folder {
     pub key:               Vec<u8>,
     /// The shared folder this folder lives in (itself, for a shared folder root).
     pub shared_folder_uid: Option<String>,
+    /// Decrypted folder data JSON (`name`, optional `color`, ...); `Null` when absent or undecryptable.
+    pub data:              Value,
 }
 
 #[derive(Debug, Default)]
@@ -157,9 +159,16 @@ fn is_placeholder_uid(bytes: &[u8]) -> bool {
     bytes.is_empty() || bytes.starts_with(&[0; 10]) || bytes.ends_with(&[0; 10])
 }
 
-fn folder_name(data: &[u8]) -> Option<String> {
-    let value: Value = serde_json::from_slice(data).ok()?;
-    value.get("name")?.as_str().map(str::to_owned)
+/// A folder's data JSON (`name`, optional `color`, ...); `Null` when it does not decrypt.
+fn folder_data(encrypted: &[u8], key: &[u8]) -> Value {
+    crypto::decrypt_aes_v1(encrypted, key)
+        .ok()
+        .and_then(|d| serde_json::from_slice(&d).ok())
+        .unwrap_or_default()
+}
+
+fn folder_name(data: &Value) -> Option<String> {
+    data.get("name")?.as_str().map(str::to_owned)
 }
 
 /// Downloads the whole vault and decrypts everything this account can reach.
@@ -235,6 +244,7 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
     }
 
     let mut sf_keys: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut sf_data: HashMap<String, Value> = HashMap::new();
     for sf in pages.iter().flat_map(|p| &p.shared_folders) {
         let sf_uid = uid(&sf.shared_folder_uid);
         let key = if sf.shared_folder_key.is_empty() {
@@ -245,15 +255,15 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
                 .or_else(|| team_sf_keys.get(&sf_uid).cloned())
         };
         let Some(key) = key else { continue };
+        let body = folder_data(&sf.data, &key);
         let name = if sf.name.is_empty() {
-            crypto::decrypt_aes_v1(&sf.data, &key)
-                .ok()
-                .and_then(|d| folder_name(&d))
+            folder_name(&body)
         } else {
             crypto::decrypt_aes_v1(&sf.name, &key)
                 .ok()
                 .and_then(|n| String::from_utf8(n).ok())
         };
+        sf_data.insert(sf_uid.clone(), body);
         vault.shared_folders.insert(
             sf_uid.clone(),
             SharedFolder {
@@ -389,10 +399,8 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
     for uf in pages.iter().flat_map(|p| &p.user_folders) {
         let folder_uid = uid(&uf.folder_uid);
         let folder_key = keys.unwrap(&uf.user_folder_key, uf.key_type).ok();
-        let name = folder_key
-            .as_ref()
-            .and_then(|k| crypto::decrypt_aes_v1(&uf.data, k).ok())
-            .and_then(|d| folder_name(&d));
+        let body = folder_data(&uf.data, folder_key.as_deref().unwrap_or_default());
+        let name = folder_name(&body);
         vault.folders.insert(
             folder_uid.clone(),
             Folder {
@@ -403,6 +411,7 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
                 subfolders:        Vec::new(),
                 key:               folder_key.unwrap_or_default(),
                 shared_folder_uid: None,
+                data:              body,
             },
         );
     }
@@ -421,6 +430,7 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
                 subfolders:        Vec::new(),
                 key:               sf.key.clone(),
                 shared_folder_uid: Some(sf_uid.clone()),
+                data:              sf_data.get(&sf_uid).cloned().unwrap_or_default(),
             },
         );
     }
@@ -429,10 +439,8 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
         let Some(sf_key) = sf_keys.get(&sf_uid) else { continue };
         let folder_uid = uid(&sff.folder_uid);
         let folder_key = crypto::decrypt_aes_v1(&sff.shared_folder_folder_key, sf_key).ok();
-        let name = folder_key
-            .as_ref()
-            .and_then(|k| crypto::decrypt_aes_v1(&sff.data, k).ok())
-            .and_then(|d| folder_name(&d));
+        let body = folder_data(&sff.data, folder_key.as_deref().unwrap_or_default());
+        let name = folder_name(&body);
         vault.folders.insert(
             folder_uid.clone(),
             Folder {
@@ -447,6 +455,7 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
                 subfolders:        Vec::new(),
                 key:               folder_key.unwrap_or_default(),
                 shared_folder_uid: Some(sf_uid),
+                data:              body,
             },
         );
     }
@@ -845,6 +854,7 @@ mod tests {
                 shared_folder_key: crypto::encrypt_aes_v2(&k_sf, &data_key).unwrap(),
                 key_type: RecordKeyType::EncryptedByDataKeyGcm as i32,
                 name: crypto::encrypt_aes_v1(b"Team Stuff", &k_sf).unwrap(),
+                data: crypto::encrypt_aes_v1(br#"{"name":"Team Stuff","color":"red"}"#, &k_sf).unwrap(),
                 ..Default::default()
             }],
             shared_folder_records: vec![SharedFolderRecord {
@@ -909,6 +919,9 @@ mod tests {
 
         assert_eq!(vault.root_folders, vec![uid(&f_user)]);
         assert_eq!(vault.folder_path(&uid(&f_sub)), "/Work/Team Stuff/Deep");
+        assert_eq!(vault.folders[&uid(&f_user)].data, json!({"name": "Work"}));
+        assert_eq!(vault.folders[&uid(&f_sf)].data, json!({"name": "Team Stuff", "color": "red"}));
+        assert_eq!(vault.folders[&uid(&f_sub)].data, json!({"name": "Deep"}));
         assert_eq!(vault.records_in(&uid(&f_sub)).map(Record::title).collect::<Vec<_>>(), ["Shared"]);
         assert_eq!(vault.records_in("").map(Record::title).collect::<Vec<_>>(), ["Mine"]);
     }
