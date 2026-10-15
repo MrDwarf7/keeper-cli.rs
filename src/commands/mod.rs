@@ -18,18 +18,6 @@ pub trait Run {
     fn run(self, app: &mut App) -> Result<()>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Detail {
-    Compact,
-    Full,
-}
-
-impl From<bool> for Detail {
-    fn from(verbose: bool) -> Self {
-        if verbose { Self::Full } else { Self::Compact }
-    }
-}
-
 pub struct App {
     pub(crate) settings: Settings,
     /// `--user`, which beats the account remembered in the settings.
@@ -137,6 +125,17 @@ impl App {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Detail {
+    Compact,
+    Full,
+}
+
+impl From<bool> for Detail {
+    fn from(verbose: bool) -> Self {
+        if verbose { Self::Full } else { Self::Compact }
+    }
+}
 /// Rows with snake_case column keys: JSON objects keyed by them, or a numbered text table
 /// titled from them.
 pub struct Table {

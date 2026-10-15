@@ -12,6 +12,17 @@ pub use self::unlock::sync_down;
 use crate::crypto::AesKey;
 use crate::uid::Uid;
 
+#[derive(Debug, Default)]
+pub struct Vault {
+    pub records:             BTreeMap<Uid, Record>,
+    pub shared_folders:      BTreeMap<Uid, SharedFolder>,
+    pub teams:               BTreeMap<Uid, Team>,
+    pub folders:             HashMap<Uid, Folder>,
+    /// Children of [`Location::Root`]; other folders keep theirs in `Folder::subfolders`.
+    pub(crate) root_folders: Vec<Uid>,
+    pub(crate) filed:        HashMap<Location, BTreeSet<Uid>>,
+}
+
 #[derive(Debug)]
 pub struct SharedFolder {
     pub uid:                    Uid,
@@ -33,49 +44,6 @@ pub struct Team {
     pub restrict_edit:  bool,
     pub restrict_share: bool,
     pub restrict_view:  bool,
-}
-
-#[derive(Debug, Default)]
-pub struct Vault {
-    pub records:             BTreeMap<Uid, Record>,
-    pub shared_folders:      BTreeMap<Uid, SharedFolder>,
-    pub teams:               BTreeMap<Uid, Team>,
-    pub folders:             HashMap<Uid, Folder>,
-    /// Children of [`Location::Root`]; other folders keep theirs in `Folder::subfolders`.
-    pub(crate) root_folders: Vec<Uid>,
-    pub(crate) filed:        HashMap<Location, BTreeSet<Uid>>,
-}
-
-/// Split Commander paths, where `//` escapes a literal slash in one component.
-fn split_path(path: &str) -> (bool, Vec<String>) {
-    let leading_slashes = path.chars().take_while(|ch| *ch == '/').count();
-    let absolute = leading_slashes % 2 == 1;
-    let path = if absolute { &path[1..] } else { path };
-    let mut parts = Vec::new();
-    let mut part = String::new();
-    let mut chars = path.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '/' {
-            part.push(ch);
-        } else if chars.peek() == Some(&'/') {
-            chars.next();
-            part.push('/');
-        } else if !part.is_empty() {
-            parts.push(std::mem::take(&mut part));
-        }
-    }
-    if !part.is_empty() {
-        parts.push(part);
-    }
-    (absolute, parts)
-}
-
-fn encode_path_parts(parts: &[String]) -> String {
-    parts
-        .iter()
-        .map(|part| part.replace('/', "//"))
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 impl Vault {
@@ -271,6 +239,38 @@ impl Vault {
         }
         self.root_folders = roots;
     }
+}
+
+/// Split Commander paths, where `//` escapes a literal slash in one component.
+fn split_path(path: &str) -> (bool, Vec<String>) {
+    let leading_slashes = path.chars().take_while(|ch| *ch == '/').count();
+    let absolute = leading_slashes % 2 == 1;
+    let path = if absolute { &path[1..] } else { path };
+    let mut parts = Vec::new();
+    let mut part = String::new();
+    let mut chars = path.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '/' {
+            part.push(ch);
+        } else if chars.peek() == Some(&'/') {
+            chars.next();
+            part.push('/');
+        } else if !part.is_empty() {
+            parts.push(std::mem::take(&mut part));
+        }
+    }
+    if !part.is_empty() {
+        parts.push(part);
+    }
+    (absolute, parts)
+}
+
+fn encode_path_parts(parts: &[String]) -> String {
+    parts
+        .iter()
+        .map(|part| part.replace('/', "//"))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
