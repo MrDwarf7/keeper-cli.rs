@@ -845,11 +845,12 @@ mod tests {
         (
             uid.to_owned(),
             Folder {
-                uid:        uid.into(),
-                kind:       FolderKind::User,
-                name:       name.into(),
-                parent:     parent.map(Into::into),
+                uid: uid.into(),
+                kind: FolderKind::User,
+                name: name.into(),
+                parent: parent.map(Into::into),
                 subfolders: kids.iter().map(|k| (*k).to_owned()).collect(),
+                ..Folder::default()
             },
         )
     }
@@ -867,13 +868,14 @@ mod tests {
         v.records.insert(
             "R1".into(),
             Record {
-                uid:                  "R1".into(),
-                version:              3,
-                revision:             1,
-                shared:               false,
+                uid: "R1".into(),
+                version: 3,
+                revision: 1,
+                shared: false,
                 client_modified_time: 0,
-                data:                 json!({"title": "DB Admin", "type": "login"}),
-                extra:                None,
+                data: json!({"title": "DB Admin", "type": "login"}),
+                extra: None,
+                ..Record::default()
             },
         );
         v.folder_records.insert("B".into(), BTreeSet::from(["R1".to_owned()]));

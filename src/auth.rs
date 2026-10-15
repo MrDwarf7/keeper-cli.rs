@@ -102,6 +102,42 @@ impl Session {
         }
     }
 
+    /// Runs a legacy JSON ("v2") command through `vault/execute_v2_command`, the path Commander
+    /// still uses for folder, delete and move operations. Errors unless `result == "success"`.
+    pub fn execute_v2(&mut self, mut request: serde_json::Value) -> Result<serde_json::Value> {
+        let now_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        if let Some(rq) = request.as_object_mut() {
+            rq.insert("client_version".into(), CLIENT_VERSION.into());
+            rq.insert("client_time".into(), serde_json::Value::from(now_millis as u64));
+            rq.insert("locale".into(), self.rest.locale.clone().into());
+            rq.insert("device_id".into(), "Commander".into());
+            rq.insert("session_token".into(), b64_encode(&self.session_token).into());
+            rq.insert("username".into(), self.user.to_lowercase().into());
+        }
+        let payload = ApiRequestPayload {
+            payload: serde_json::to_vec(&request)?,
+            ..Default::default()
+        };
+        let body = match self.rest.execute("vault/execute_v2_command", &payload)? {
+            Response::Ok(body) => body,
+            Response::Failed(f) => return Err(f.into()),
+        };
+        let response: serde_json::Value = serde_json::from_slice(&body)?;
+        if response.get("result").and_then(serde_json::Value::as_str) == Some("success") {
+            return Ok(response);
+        }
+        let field = |k: &str| {
+            response
+                .get(k)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        Err(Error::api(field("result_code"), field("message")))
+    }
+
     pub fn set_user_setting(&mut self, setting: &str, value: &str) -> Result<()> {
         let rq = UserSettingRequest {
             setting: setting.into(),

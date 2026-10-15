@@ -16,24 +16,29 @@ use crate::prelude::*;
 use crate::proto::records::RecordKeyType;
 use crate::proto::vault::{SyncDownRequest, SyncDownResponse};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FolderKind {
+    #[default]
     User,
     SharedFolder,
     SharedFolderFolder,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Folder {
-    pub uid:        String,
-    pub kind:       FolderKind,
-    pub name:       String,
+    pub uid:               String,
+    pub kind:              FolderKind,
+    pub name:              String,
     /// `None` means the vault root.
-    pub parent:     Option<String>,
-    pub subfolders: Vec<String>,
+    pub parent:            Option<String>,
+    pub subfolders:        Vec<String>,
+    /// The folder's own key; for a shared folder this is the shared folder key.
+    pub key:               Vec<u8>,
+    /// The shared folder this folder lives in (itself, for a shared folder root).
+    pub shared_folder_uid: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Record {
     pub uid:                  String,
     pub version:              i32,
@@ -42,6 +47,13 @@ pub struct Record {
     pub client_modified_time: i64,
     pub data:                 Value,
     pub extra:                Option<Value>,
+    pub key:                  Vec<u8>,
+    /// Whether this account owns the record (from record metadata).
+    pub owner:                bool,
+    /// Unencrypted server-side record data, e.g. the `file_ids` of a v3 record's attachments.
+    pub udata:                Option<Value>,
+    /// Storage size of a v4 file record's content.
+    pub file_size:            i64,
 }
 
 #[derive(Debug)]
@@ -55,6 +67,7 @@ pub struct SharedFolder {
     pub default_manage_users:   bool,
     pub default_can_edit:       bool,
     pub default_can_share:      bool,
+    pub key:                    Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -253,6 +266,7 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
                 default_manage_users:   sf.default_manage_users,
                 default_can_edit:       sf.default_can_edit,
                 default_can_share:      sf.default_can_reshare,
+                key:                    key.clone(),
             },
         );
         sf_keys.insert(sf_uid, key);
@@ -285,7 +299,11 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
         }
     }
 
+    let mut owned: HashSet<String> = HashSet::new();
     for md in pages.iter().flat_map(|p| &p.record_meta_data) {
+        if md.owner {
+            owned.insert(uid(&md.record_uid));
+        }
         if let Ok(key) = keys.unwrap(&md.record_key, md.record_key_type)
             && key.len() == 32
         {
@@ -351,32 +369,40 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
         vault.records.insert(
             rec_uid.clone(),
             Record {
-                uid: rec_uid,
+                uid: rec_uid.clone(),
                 version: r.version,
                 revision: r.revision,
                 shared: r.shared,
                 client_modified_time: r.client_modified_time,
                 data,
                 extra,
+                key: key.clone(),
+                owner: owned.contains(&rec_uid),
+                udata: (!r.udata.is_empty())
+                    .then(|| serde_json::from_str(&r.udata).ok())
+                    .flatten(),
+                file_size: r.file_size,
             },
         );
     }
 
     for uf in pages.iter().flat_map(|p| &p.user_folders) {
         let folder_uid = uid(&uf.folder_uid);
-        let name = keys
-            .unwrap(&uf.user_folder_key, uf.key_type)
-            .and_then(|k| crypto::decrypt_aes_v1(&uf.data, &k))
-            .ok()
+        let folder_key = keys.unwrap(&uf.user_folder_key, uf.key_type).ok();
+        let name = folder_key
+            .as_ref()
+            .and_then(|k| crypto::decrypt_aes_v1(&uf.data, k).ok())
             .and_then(|d| folder_name(&d));
         vault.folders.insert(
             folder_uid.clone(),
             Folder {
-                name:       name.unwrap_or_else(|| folder_uid.clone()),
-                uid:        folder_uid,
-                kind:       FolderKind::User,
-                parent:     (!uf.parent_uid.is_empty()).then(|| uid(&uf.parent_uid)),
-                subfolders: Vec::new(),
+                name:              name.unwrap_or_else(|| folder_uid.clone()),
+                uid:               folder_uid,
+                kind:              FolderKind::User,
+                parent:            (!uf.parent_uid.is_empty()).then(|| uid(&uf.parent_uid)),
+                subfolders:        Vec::new(),
+                key:               folder_key.unwrap_or_default(),
+                shared_folder_uid: None,
             },
         );
     }
@@ -388,11 +414,13 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
         vault.folders.insert(
             sf_uid.clone(),
             Folder {
-                name:       sf.name.clone(),
-                uid:        sf_uid.clone(),
-                kind:       FolderKind::SharedFolder,
-                parent:     (!is_placeholder_uid(&ufsf.folder_uid)).then(|| uid(&ufsf.folder_uid)),
-                subfolders: Vec::new(),
+                name:              sf.name.clone(),
+                uid:               sf_uid.clone(),
+                kind:              FolderKind::SharedFolder,
+                parent:            (!is_placeholder_uid(&ufsf.folder_uid)).then(|| uid(&ufsf.folder_uid)),
+                subfolders:        Vec::new(),
+                key:               sf.key.clone(),
+                shared_folder_uid: Some(sf_uid.clone()),
             },
         );
     }
@@ -400,22 +428,25 @@ fn build(pages: &[SyncDownResponse], keys: &Keys) -> Vault {
         let sf_uid = uid(&sff.shared_folder_uid);
         let Some(sf_key) = sf_keys.get(&sf_uid) else { continue };
         let folder_uid = uid(&sff.folder_uid);
-        let name = crypto::decrypt_aes_v1(&sff.shared_folder_folder_key, sf_key)
-            .and_then(|k| crypto::decrypt_aes_v1(&sff.data, &k))
-            .ok()
+        let folder_key = crypto::decrypt_aes_v1(&sff.shared_folder_folder_key, sf_key).ok();
+        let name = folder_key
+            .as_ref()
+            .and_then(|k| crypto::decrypt_aes_v1(&sff.data, k).ok())
             .and_then(|d| folder_name(&d));
         vault.folders.insert(
             folder_uid.clone(),
             Folder {
-                name:       name.unwrap_or_else(|| folder_uid.clone()),
-                uid:        folder_uid,
-                kind:       FolderKind::SharedFolderFolder,
-                parent:     Some(if sff.parent_uid.is_empty() {
+                name:              name.unwrap_or_else(|| folder_uid.clone()),
+                uid:               folder_uid,
+                kind:              FolderKind::SharedFolderFolder,
+                parent:            Some(if sff.parent_uid.is_empty() {
                     sf_uid.clone()
                 } else {
                     uid(&sff.parent_uid)
                 }),
-                subfolders: Vec::new(),
+                subfolders:        Vec::new(),
+                key:               folder_key.unwrap_or_default(),
+                shared_folder_uid: Some(sf_uid),
             },
         );
     }
@@ -885,15 +916,14 @@ mod tests {
     #[test]
     fn legacy_record_fields_and_totp_come_from_data_and_extra() {
         let r = Record {
-            uid:                  "u".into(),
-            version:              2,
-            revision:             0,
-            shared:               false,
+            uid: "u".into(),
+            version: 2,
+            revision: 0,
+            shared: false,
             client_modified_time: 0,
-            data:                 json!({"title": "Old", "secret1": "bob", "secret2": "pw", "link": "https://x", "custom": [{"name": "PIN", "value": "1234"}]}),
-            extra:                Some(
-                json!({"fields": [{"field_type": "totp", "data": "otpauth://totp/x?secret=AAAA"}]}),
-            ),
+            data: json!({"title": "Old", "secret1": "bob", "secret2": "pw", "link": "https://x", "custom": [{"name": "PIN", "value": "1234"}]}),
+            extra: Some(json!({"fields": [{"field_type": "totp", "data": "otpauth://totp/x?secret=AAAA"}]})),
+            ..Record::default()
         };
         assert_eq!(r.description(), "bob @ https://x");
         assert_eq!(r.totp_url(), Some("otpauth://totp/x?secret=AAAA"));
