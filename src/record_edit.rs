@@ -859,23 +859,60 @@ fn unlink(session: &mut Session, filings: &[Filing], confirm: Confirm) -> Result
             .map(|f| serde_json::to_value(Doomed::from(f)))
             .collect::<Result<Vec<_>, _>>()?;
         let rs = session.execute_v2(serde_json::json!({ "command": "pre_delete", "objects": objects }))?;
-        let pre = &rs["pre_delete_response"];
+        let token = pre_delete_token(&rs)?;
         if confirm == Confirm::Ask {
-            for line in pre["would_delete"]["deletion_summary"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-            {
-                println!("{line}");
+            if let Some(summary) = deletion_summary(&rs)? {
+                for item in summary {
+                    let line = item.as_str().ok_or_else(|| {
+                        Error::Generic("malformed pre_delete response: deletion_summary entries must be strings".into())
+                    })?;
+                    println!("{line}");
+                }
             }
             if ask("Do you want to proceed with removal?")? == Answer::No {
                 continue;
             }
         }
-        session.execute_v2(serde_json::json!({ "command": "delete", "pre_delete_token": pre["pre_delete_token"] }))?;
+        session.execute_v2(serde_json::json!({ "command": "delete", "pre_delete_token": token }))?;
     }
     Ok(())
+}
+
+fn pre_delete_token(response: &Value) -> Result<&str> {
+    response
+        .get("pre_delete_response")
+        .and_then(Value::as_object)
+        .and_then(|pre| pre.get("pre_delete_token"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Generic("malformed pre_delete response: missing string pre_delete_token".into()))
+}
+
+fn deletion_summary(response: &Value) -> Result<Option<&[Value]>> {
+    let pre = response
+        .get("pre_delete_response")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::Generic("malformed pre_delete response: missing pre_delete_response object".into()))?;
+    let Some(would_delete) = pre.get("would_delete") else {
+        return Ok(None);
+    };
+    let would_delete = would_delete
+        .as_object()
+        .ok_or_else(|| Error::Generic("malformed pre_delete response: would_delete must be an object".into()))?;
+    let Some(summary) = would_delete.get("deletion_summary") else {
+        return Ok(None);
+    };
+    summary
+        .as_array()
+        .map(|items| Some(items.as_slice()))
+        .ok_or_else(|| Error::Generic("malformed pre_delete response: deletion_summary must be an array".into()))
+}
+
+fn delete_statuses(response: &Value) -> Result<&[Value]> {
+    response
+        .get("delete_records")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| Error::Generic("malformed record_update response: missing delete_records array".into()))
 }
 
 /// Deletes records for every user; only the owner of a record may.
@@ -902,15 +939,19 @@ fn purge(ctx: &mut Ctx<'_>, filings: &[Filing], confirm: Confirm) -> Result<()> 
         let rs = ctx
             .session
             .execute_v2(serde_json::json!({ "command": "record_update", "delete_records": chunk }))?;
-        for status in rs["delete_records"].as_array().into_iter().flatten() {
-            if status["status"] == "success" {
+        for status in delete_statuses(&rs)? {
+            let state = status.get("status").and_then(Value::as_str).ok_or_else(|| {
+                Error::Generic("malformed record_update response: delete_records entry is missing string status".into())
+            })?;
+            if state == "success" {
                 deleted += 1;
             } else {
-                eprintln!(
-                    "Failed to delete record {}: {}",
-                    status["uid"].as_str().unwrap_or_default(),
-                    status["status"].as_str().unwrap_or_default()
-                );
+                let uid = status.get("uid").and_then(Value::as_str).ok_or_else(|| {
+                    Error::Generic(
+                        "malformed record_update response: failed delete_records entry is missing string uid".into(),
+                    )
+                })?;
+                eprintln!("Failed to delete record {uid}: {state}");
             }
         }
     }
@@ -1000,7 +1041,7 @@ mod tests {
     #[test]
     fn add_encrypts_keys_and_padded_record_body() {
         let new = New {
-            uid:  Uid::from(&[1; 16][..]),
+            uid:  Uid::from([1; 16].as_slice()),
             key:  key(2),
             body: Body {
                 type_name: "login".into(),
@@ -1018,8 +1059,8 @@ mod tests {
     }
     #[test]
     fn shared_subfolder_placement_uses_its_shared_folder_key() {
-        let shared_uid = Uid::from(&[7; 16][..]);
-        let folder_uid = Uid::from(&[8; 16][..]);
+        let shared_uid = Uid::from([7; 16].as_slice());
+        let folder_uid = Uid::from([8; 16].as_slice());
         let shared_key = key(9);
         let mut vault = Vault::default();
         vault.shared_folders.insert(
@@ -1065,7 +1106,7 @@ mod tests {
     #[test]
     fn update_preserves_record_revision_and_link_changes() {
         let old = Existing {
-            uid:      Uid::from(&[4; 16][..]),
+            uid:      Uid::from([4; 16].as_slice()),
             key:      key(5),
             revision: 8,
             body:     Body {
@@ -1113,11 +1154,14 @@ mod tests {
             .insert(record.clone());
         let found = find(&vault, &Location::Root, "/Work/a//b/DB Admin").unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].record, record.to_string());
+        let [only] = found.as_slice() else {
+            panic!("expected one record");
+        };
+        assert_eq!(only.record, record.to_string());
     }
     #[test]
     fn rm_accepts_padded_record_uids() {
-        let uid = Uid::from(&[10; 16][..]);
+        let uid = Uid::from([10; 16].as_slice());
         let mut vault = Vault::default();
         vault.records.insert(
             uid.clone(),
@@ -1141,6 +1185,21 @@ mod tests {
                 origin: Origin::Root,
             }]
         );
+    }
+
+    #[test]
+    fn deletion_responses_require_tokens_and_status_lists() {
+        let missing_token = serde_json::json!({"pre_delete_response": {}});
+        assert!(pre_delete_token(&missing_token).is_err());
+        let response = serde_json::json!({"pre_delete_response": {"pre_delete_token": "token"}});
+        assert_eq!(pre_delete_token(&response).unwrap(), "token");
+        assert_eq!(deletion_summary(&response).unwrap(), None);
+
+        assert!(delete_statuses(&serde_json::json!({})).is_err());
+        let response = serde_json::json!({"delete_records": []});
+        let [] = delete_statuses(&response).unwrap() else {
+            panic!("expected an empty delete status list");
+        };
     }
 
     #[test]
@@ -1189,8 +1248,11 @@ mod tests {
         .unwrap();
         assert_eq!(selected.id, "login");
 
+        let [_, selected_definition] = definitions.as_slice() else {
+            panic!("expected two definitions");
+        };
         let selected = TypeDef::try_from(RecordTypeLookup {
-            record_types: &definitions[1..],
+            record_types: std::slice::from_ref(selected_definition),
             name:         "login",
         })
         .unwrap();

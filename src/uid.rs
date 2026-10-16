@@ -9,8 +9,9 @@ use crate::prelude::*;
 pub(crate) fn random_bytes<R: rand::RngCore + rand::CryptoRng>(rng: &mut R) -> [u8; 16] {
     let mut bytes = [0; 16];
     rand::RngCore::fill_bytes(rng, &mut bytes);
-    if bytes[0] & 0xf8 == 0xf8 {
-        bytes[0] &= 0x7f;
+    let [first, ..] = &mut bytes;
+    if *first & 0xf8 == 0xf8 {
+        *first &= 0x7f;
     }
     bytes
 }
@@ -65,7 +66,7 @@ mod tests {
     #[test]
     fn bytes_roundtrip_and_padding_is_tolerated() {
         let bytes = [7u8; 16];
-        let uid = Uid::from(&bytes[..]);
+        let uid = Uid::from(bytes.as_slice());
         assert_eq!(uid.to_string().len(), 22);
         assert_eq!(Vec::<u8>::from(&uid), bytes);
         assert_eq!(format!("{uid}==").parse::<Uid>().unwrap(), uid);
@@ -85,10 +86,12 @@ mod tests {
             let generated = random_bytes(&mut generated_rng);
             let encoded = Uid::from(generated.as_slice());
             assert!(!encoded.as_ref().starts_with('-') && !encoded.as_ref().starts_with('_'));
-            assert_eq!(&generated[1..], &raw[1..]);
-            assert_eq!(generated[0] & 0x7f, raw[0] & 0x7f);
+            assert!(generated.iter().skip(1).eq(raw.iter().skip(1)));
+            let [generated_first, ..] = generated;
+            let [raw_first, ..] = raw;
+            assert_eq!(generated_first & 0x7f, raw_first & 0x7f);
             let raw_uid = Uid::from(raw.as_slice());
-            if !matches!(raw_uid.as_ref().as_bytes()[0], b'-' | b'_') {
+            if !matches!(raw_uid.as_ref().as_bytes(), [b'-' | b'_', ..]) {
                 assert_eq!(generated, raw);
             }
         }

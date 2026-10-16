@@ -188,9 +188,9 @@ mod tests {
         settings.save().unwrap();
 
         let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved["proxy"], "http://p:1");
-        assert_eq!(saved["debug"], true);
-        assert_eq!(saved["device_token"], "tok");
+        assert_eq!(saved.get("proxy").and_then(serde_json::Value::as_str), Some("http://p:1"));
+        assert_eq!(saved.get("debug").and_then(serde_json::Value::as_bool), Some(true));
+        assert_eq!(saved.get("device_token").and_then(serde_json::Value::as_str), Some("tok"));
         assert!(saved.get("clone_code").is_none());
         assert!(saved.get("password").is_none());
         assert!(Settings::load(dir.join("missing.json")).unwrap().user.is_none());

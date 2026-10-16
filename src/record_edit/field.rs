@@ -477,10 +477,14 @@ impl FromStr for Spec {
             name.push_str(more);
             value = rest;
         }
-        let (section, name) = match name.get(..2) {
-            Some("f.") => (Section::Fields, &name[2..]),
-            Some("c.") => (Section::Any, &name[2..]),
-            _ => (Section::Any, name.as_str()),
+        let (section, name) = match name.strip_prefix("f.") {
+            Some(name) => (Section::Fields, name),
+            None => {
+                match name.strip_prefix("c.") {
+                    Some(name) => (Section::Any, name),
+                    None => (Section::Any, name.as_str()),
+                }
+            }
         };
         if name.is_empty() {
             return Err(bad("Missing field type or label"));
@@ -540,10 +544,9 @@ enum Assign {
     Set(Value),
 }
 
-#[derive(Clone, Copy)]
-enum Slot {
-    Fields(usize),
-    Custom(usize),
+enum Slot<'a> {
+    Fields(&'a mut Field),
+    Custom(&'a mut Field),
 }
 
 const GEN_LABELS: [&str; 4] = ["password", "passphrase", "pwd", "secret"];
@@ -574,16 +577,25 @@ pub fn apply(body: &mut Body, specs: &[Spec], found: &mut Findings) {
         };
         if spec.value.is_empty() {
             match slot {
-                Slot::Fields(i) => body.fields[i].value.clear(),
-                Slot::Custom(i) => {
-                    body.custom.remove(i);
+                Slot::Fields(field) => field.value.clear(),
+                Slot::Custom(_) => {
+                    let label = spec.label.to_lowercase();
+                    let ignore_label = ty.parse::<Def>().is_ok_and(|d| d.multiple == Multiple::Never);
+                    let mut removed = false;
+                    body.custom.retain_mut(|field| {
+                        if !removed && field_matches(field, spec, &label, ignore_label) {
+                            removed = true;
+                            false
+                        } else {
+                            true
+                        }
+                    });
                 }
             }
             continue;
         }
         let field = match slot {
-            Slot::Fields(i) => &mut body.fields[i],
-            Slot::Custom(i) => &mut body.custom[i],
+            Slot::Fields(field) | Slot::Custom(field) => field,
         };
         let assign = match Input::from(spec.value.as_str()) {
             Input::Generate(rest) => generated(&field.ty, rest, found),
@@ -603,25 +615,25 @@ pub fn apply(body: &mut Body, specs: &[Spec], found: &mut Findings) {
 
 /// Finds the field an edit is about, creating a custom field for a non-empty value that matches
 /// nothing.
-fn locate(body: &mut Body, spec: &Spec, ty: &str, found: &mut Findings) -> Option<Slot> {
+fn field_matches(field: &Field, spec: &Spec, label: &str, ignore_label: bool) -> bool {
+    (spec.ty.is_empty() || field.ty == spec.ty) && (ignore_label || field.label.to_lowercase() == label)
+}
+
+fn locate<'a>(body: &'a mut Body, spec: &Spec, ty: &str, found: &mut Findings) -> Option<Slot<'a>> {
     let label = spec.label.to_lowercase();
     // An unknown type has no rules: labels count and there is no single-field shortcut.
     let def = ty.parse::<Def>().ok();
     let ignore_label = def.is_some_and(|d| d.multiple == Multiple::Never);
-    let matches =
-        |f: &Field| (spec.ty.is_empty() || f.ty == spec.ty) && (ignore_label || f.label.to_lowercase() == label);
 
     if spec.section == Section::Fields {
-        let of_type: Vec<usize> = (0..body.fields.len()).filter(|&i| body.fields[i].ty == ty).collect();
-        let hit = match of_type.as_slice() {
-            [only] => Some(*only),
-            _ => {
-                of_type
-                    .iter()
-                    .copied()
-                    .find(|&i| body.fields[i].label.to_lowercase() == label)
-            }
+        let only = {
+            let mut of_type = body.fields.iter().filter(|field| field.ty == ty);
+            of_type.next().is_some() && of_type.next().is_none()
         };
+        let hit = body
+            .fields
+            .iter_mut()
+            .find(|field| field.ty == ty && (only || field.label.to_lowercase() == label));
         if hit.is_none() {
             found
                 .warnings
@@ -630,18 +642,29 @@ fn locate(body: &mut Body, spec: &Spec, ty: &str, found: &mut Findings) -> Optio
         return hit.map(Slot::Fields);
     }
 
-    if let Some(i) = body.fields.iter().position(matches) {
-        return Some(Slot::Fields(i));
+    if let Some(field) = body
+        .fields
+        .iter_mut()
+        .find(|field| field_matches(field, spec, &label, ignore_label))
+    {
+        return Some(Slot::Fields(field));
     }
     // "url=..." without a label hits the record's only url field whatever it is labelled.
     if label.is_empty() && def.is_some_and(|d| d.multiple != Multiple::Always) {
-        let mut of_type = (0..body.fields.len()).filter(|&i| body.fields[i].ty == ty);
-        if let (Some(only), None) = (of_type.next(), of_type.next()) {
-            return Some(Slot::Fields(only));
+        let only = {
+            let mut of_type = body.fields.iter().filter(|field| field.ty == ty);
+            of_type.next().is_some() && of_type.next().is_none()
+        };
+        if only {
+            return body.fields.iter_mut().find(|field| field.ty == ty).map(Slot::Fields);
         }
     }
-    if let Some(i) = body.custom.iter().position(matches) {
-        return Some(Slot::Custom(i));
+    if let Some(field) = body
+        .custom
+        .iter_mut()
+        .find(|field| field_matches(field, spec, &label, ignore_label))
+    {
+        return Some(Slot::Custom(field));
     }
     if spec.value.is_empty() {
         return None;
@@ -651,7 +674,7 @@ fn locate(body: &mut Body, spec: &Spec, ty: &str, found: &mut Findings) -> Optio
         label: spec.label.clone(),
         ..Field::default()
     });
-    Some(Slot::Custom(body.custom.len() - 1))
+    body.custom.last_mut().map(Slot::Custom)
 }
 
 fn store(field: &mut Field, assign: Assign) {
@@ -1300,6 +1323,23 @@ mod tests {
         found
     }
 
+    fn only_value(field: &Field) -> &Value {
+        let [value] = field.value.as_slice() else {
+            panic!("expected one field value");
+        };
+        value
+    }
+
+    fn only_custom_object(body: &Body) -> &Map<String, Value> {
+        let [field] = body.custom.as_slice() else {
+            panic!("expected one custom field");
+        };
+        let [Value::Object(value)] = field.value.as_slice() else {
+            panic!("expected one object value");
+        };
+        value
+    }
+
     #[test]
     fn field_specs_decode_escaped_equals_and_sections() {
         let parsed: Spec = "f.text.a==b==c= =value".parse().unwrap();
@@ -1316,9 +1356,19 @@ mod tests {
         let mut body = login_body();
         let found = edit(&mut body, &["login=alice", "password=secret", "text.note=extra"]);
         assert!(found.errors.is_empty() && found.warnings.is_empty());
-        assert_eq!(body.fields[0].value, [json!("alice")]);
-        assert_eq!(body.fields[1].value, [json!("secret")]);
-        assert_eq!(body.custom[0].label, "note");
+        let [login, password, url] = body.fields.as_slice() else {
+            panic!("expected login, password, and url fields");
+        };
+        assert_eq!(login.ty, "login");
+        assert_eq!(password.ty, "password");
+        assert_eq!(url.ty, "url");
+        assert!(url.value.is_empty());
+        assert_eq!(only_value(login), &json!("alice"));
+        assert_eq!(only_value(password), &json!("secret"));
+        let [note] = body.custom.as_slice() else {
+            panic!("expected one custom field");
+        };
+        assert_eq!(note.label, "note");
         let found = edit(&mut body, &["text.note="]);
         assert!(found.warnings.is_empty());
         assert!(body.custom.is_empty());
@@ -1329,19 +1379,20 @@ mod tests {
         let mut body = login_body();
         let found = edit(&mut body, &[r#"phone.Cell=$JSON:{"number":"555","type":"Mobile"}"#]);
         assert!(found.warnings.is_empty());
-        assert_eq!(body.custom[0].value[0]["type"], "Mobile");
+        assert_eq!(only_custom_object(&body).get("type"), Some(&json!("Mobile")));
 
         // Commander completes each JSON object before applying it, so omitted keys reset to "".
         let found = edit(&mut body, &[r#"phone.Cell=$JSON:{"number":"123","region":"US"}"#]);
         assert!(found.warnings.is_empty());
-        assert_eq!(body.custom[0].value[0]["number"], "123");
-        assert_eq!(body.custom[0].value[0]["type"], "");
-        assert_eq!(body.custom[0].value[0]["region"], "US");
-        assert_eq!(body.custom[0].value[0]["ext"], "");
+        let phone = only_custom_object(&body);
+        assert_eq!(phone.get("number"), Some(&json!("123")));
+        assert_eq!(phone.get("type"), Some(&json!("")));
+        assert_eq!(phone.get("region"), Some(&json!("US")));
+        assert_eq!(phone.get("ext"), Some(&json!("")));
 
         let found = edit(&mut body, &[r#"phone.Cell=$JSON:{"type":null}"#]);
         assert!(found.warnings.is_empty());
-        assert!(body.custom[0].value[0].get("type").is_none());
+        assert!(only_custom_object(&body).get("type").is_none());
     }
 
     #[test]
@@ -1351,7 +1402,7 @@ mod tests {
         let found = edit(&mut body, &["phone=Mobile: US (555)555-1234"]);
         assert!(found.errors.is_empty() && found.warnings.is_empty());
         assert_eq!(notes, "first\nsecond");
-        assert_eq!(body.custom[0].value[0]["number"], "(555)555-1234");
+        assert_eq!(only_custom_object(&body).get("number"), Some(&json!("(555)555-1234")));
         let mut notes = "old".to_owned();
         NotesEdit::from("+ next\\nline").apply(&mut notes);
         assert_eq!(notes, "old\nnext\nline");
@@ -1377,9 +1428,14 @@ mod tests {
         }];
         adjust(&mut body, &defs);
         assert_eq!(body.fields.len(), 1);
-        assert_eq!(body.fields[0].value, [json!("alice")]);
-        assert_eq!(body.custom.len(), 1);
-        assert_eq!(body.custom[0].ty, "password");
+        let [field] = body.fields.as_slice() else {
+            panic!("expected one typed field");
+        };
+        assert_eq!(only_value(field), &json!("alice"));
+        let [custom] = body.custom.as_slice() else {
+            panic!("expected one custom field");
+        };
+        assert_eq!(custom.ty, "password");
     }
 
     #[test]

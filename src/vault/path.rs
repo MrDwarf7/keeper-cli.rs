@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::fmt::Write as _;
 use std::str::FromStr;
 
 use super::Location;
@@ -21,36 +21,30 @@ pub struct VaultPath {
 
 impl From<&str> for VaultPath {
     fn from(path: &str) -> Self {
-        let bytes = path.as_bytes();
-        let leading_slashes = bytes.iter().take_while(|&&byte| byte == b'/').count();
+        let leading_slashes = path.chars().take_while(|&character| character == '/').count();
         let anchor = if leading_slashes % 2 == 1 {
             PathAnchor::Root
         } else {
             PathAnchor::Current
         };
-        let mut index = usize::from(anchor == PathAnchor::Root);
+        let mut characters = path.chars().skip(usize::from(anchor == PathAnchor::Root)).peekable();
+
         let mut components = Vec::new();
         let mut component = String::new();
         let mut trailing_separator = false;
-
-        while index < bytes.len() {
-            if bytes[index] != b'/' {
-                let start = index;
-                while index < bytes.len() && bytes[index] != b'/' {
-                    index += 1;
-                }
-                component.push_str(&path[start..index]);
+        while let Some(character) = characters.next() {
+            if character != '/' {
+                component.push(character);
                 trailing_separator = false;
-            } else if bytes.get(index + 1) == Some(&b'/') {
+            } else if characters.peek() == Some(&'/') {
+                characters.next();
                 component.push('/');
-                index += 2;
                 trailing_separator = false;
             } else {
                 if !component.is_empty() {
                     components.push(std::mem::take(&mut component));
                 }
                 trailing_separator = true;
-                index += 1;
             }
         }
         if !component.is_empty() {
@@ -66,7 +60,7 @@ impl From<&str> for VaultPath {
 }
 
 impl FromStr for VaultPath {
-    type Err = Infallible;
+    type Err = std::convert::Infallible;
 
     fn from_str(path: &str) -> Result<Self, Self::Err> {
         Ok(path.into())
@@ -82,15 +76,13 @@ impl std::fmt::Display for VaultPath {
             if index > 0 {
                 f.write_str("/")?;
             }
-            let mut start = 0;
-            for (slash, character) in component.char_indices() {
+            for character in component.chars() {
                 if character == '/' {
-                    f.write_str(&component[start..slash])?;
                     f.write_str("//")?;
-                    start = slash + character.len_utf8();
+                } else {
+                    f.write_char(character)?;
                 }
             }
-            f.write_str(&component[start..])?;
         }
         if self.trailing_separator && !self.components.is_empty() {
             f.write_str("/")?;
@@ -136,7 +128,7 @@ mod tests {
             "/Work/a//b",
             "A///B",
             "/Work/Infra/missing/a//b/",
-            r"folder\name",
+            "///café/é//雪/",
         ] {
             let path = source.parse::<VaultPath>().unwrap();
             let rendered = path.to_string();

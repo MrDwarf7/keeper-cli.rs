@@ -77,33 +77,40 @@ impl FromStr for Rules {
     /// Parses `"[length,] upper, lower, digits, symbols"`.
     fn from_str(source: &str) -> Result<Self> {
         let fields = source.split(',').map(str::trim).collect::<Vec<_>>();
-        let (length, offset) = match fields.len() {
-            4 => (DEFAULT_LENGTH, 0),
-            5 => {
+        let invalid_rules =
+            || Error::Generic("Invalid rules. Format is \"[length,] upper, lower, digits, symbols\"".into());
+        let (length, uppercase, lowercase, digits, symbols) = match fields.as_slice() {
+            [uppercase, lowercase, digits, symbols] => (DEFAULT_LENGTH, *uppercase, *lowercase, *digits, *symbols),
+            [length, uppercase, lowercase, digits, symbols] => {
                 (
-                    fields[0].parse().map_err(|_| {
-                        Error::Generic("Invalid rules. Format is \"[length,] upper, lower, digits, symbols\"".into())
+                    length.parse::<usize>().map_err(|source| {
+                        Error::Context {
+                            context: "Invalid rule length".into(),
+                            source:  Box::new(source.into()),
+                        }
                     })?,
-                    1,
+                    *uppercase,
+                    *lowercase,
+                    *digits,
+                    *symbols,
                 )
             }
-            _ => {
-                return Err(Error::Generic(
-                    "Invalid rules. Format is \"[length,] upper, lower, digits, symbols\"".into(),
-                ));
-            }
+            _ => return Err(invalid_rules()),
         };
-        let parse_count = |value: &str| {
-            value.parse::<i32>().map(ClassCount::from).map_err(|_| {
-                Error::Generic("Invalid rules. Format is \"[length,] upper, lower, digits, symbols\"".into())
+        let parse_count = |value: &str, field: &str| {
+            value.parse::<i32>().map(ClassCount::from).map_err(|source| {
+                Error::Context {
+                    context: format!("Invalid {field} class count"),
+                    source:  Box::new(source.into()),
+                }
             })
         };
         Ok(Self {
             length,
-            uppercase: parse_count(fields[offset])?,
-            lowercase: parse_count(fields[offset + 1])?,
-            digits: parse_count(fields[offset + 2])?,
-            symbols: parse_count(fields[offset + 3])?,
+            uppercase: parse_count(uppercase, "uppercase")?,
+            lowercase: parse_count(lowercase, "lowercase")?,
+            digits: parse_count(digits, "digits")?,
+            symbols: parse_count(symbols, "symbols")?,
         })
     }
 }

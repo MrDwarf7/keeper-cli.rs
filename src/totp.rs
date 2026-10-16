@@ -107,17 +107,22 @@ impl Totp {
     pub fn code_at(&self, unix_time: u64) -> Code {
         let counter = (unix_time / self.period).to_be_bytes();
         let digest = match self.algorithm {
-            Algorithm::Sha1 => hmac::<Hmac<Sha1>>(&self.secret, &counter),
-            Algorithm::Sha256 => hmac::<Hmac<Sha256>>(&self.secret, &counter),
-            Algorithm::Sha512 => hmac::<Hmac<Sha512>>(&self.secret, &counter),
+            Algorithm::Sha1 => Digest::Sha1(hmac::<Hmac<Sha1>>(&self.secret, &counter).into()),
+            Algorithm::Sha256 => Digest::Sha256(hmac::<Hmac<Sha256>>(&self.secret, &counter).into()),
+            Algorithm::Sha512 => Digest::Sha512(hmac::<Hmac<Sha512>>(&self.secret, &counter).into()),
         };
-        let offset = (digest[digest.len() - 1] & 0x0f) as usize;
-        let binary = u32::from_be_bytes([
-            digest[offset] & 0x7f,
-            digest[offset + 1],
-            digest[offset + 2],
-            digest[offset + 3],
-        ]);
+        let offset = match digest {
+            Digest::Sha1([.., last]) | Digest::Sha256([.., last]) | Digest::Sha512([.., last]) => {
+                (last & 0x0f) as usize
+            }
+        };
+        let binary = digest
+            .as_ref()
+            .iter()
+            .skip(offset)
+            .take(4)
+            .fold(0u32, |value, byte| (value << 8) | u32::from(*byte))
+            & 0x7fff_ffff;
         let code = u64::from(binary) % 10u64.pow(self.digits);
         Code {
             value:     format!("{code:0width$}", width = self.digits as usize),
@@ -134,10 +139,26 @@ impl Totp {
     }
 }
 
-fn hmac<M: Mac + hmac::digest::KeyInit>(key: &[u8], msg: &[u8]) -> Vec<u8> {
+enum Digest {
+    Sha1([u8; 20]),
+    Sha256([u8; 32]),
+    Sha512([u8; 64]),
+}
+
+impl AsRef<[u8]> for Digest {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Sha1(bytes) => bytes,
+            Self::Sha256(bytes) => bytes,
+            Self::Sha512(bytes) => bytes,
+        }
+    }
+}
+
+fn hmac<M: Mac + hmac::digest::KeyInit>(key: &[u8], msg: &[u8]) -> hmac::digest::Output<M> {
     let mut mac = <M as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(msg);
-    mac.finalize().into_bytes().to_vec()
+    mac.finalize().into_bytes()
 }
 #[cfg(test)]
 mod tests {
@@ -155,7 +176,7 @@ mod tests {
         let cases = [
             (
                 "SHA1",
-                &b"12345678901234567890"[..],
+                b"12345678901234567890".as_slice(),
                 [(59, "94287082"), (1111111109, "07081804"), (20000000000, "65353130")],
             ),
             (

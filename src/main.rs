@@ -149,7 +149,7 @@ fn normalize_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<std
         );
         normalized.push(match text {
             "-rt" => "--record-type".into(),
-            value if value.starts_with("-rt=") => format!("--record-type={}", &value[4..]).into(),
+            value if let Some(value) = value.strip_prefix("-rt=") => format!("--record-type={value}").into(),
             "-sf" => "--shared-folder".into(),
             "-uf" => "--user-folder".into(),
             "-cu" => "--copy-uid".into(),

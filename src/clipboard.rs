@@ -456,7 +456,11 @@ mod tests {
 
     fn login_record(uid: &str, title: &str, login: &str, notes: &str) -> Record {
         let mut record = typed(uid, title, json!([{"type": "login", "value": [login]}]));
-        record.data["notes"] = json!(notes);
+        record
+            .data
+            .as_object_mut()
+            .expect("record fixture data is an object")
+            .insert("notes".into(), json!(notes));
         record
     }
 

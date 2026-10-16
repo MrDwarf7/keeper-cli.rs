@@ -152,7 +152,9 @@ unsafe_code = { level = "forbid", priority = 0 }
 # unsafe_code = "forbid"
 
 [lints.clippy]
-enum_glob_use = { level = "warn", priority = 2 }
+enum_glob_use    = { level = "warn", priority = 2 }
+indexing_slicing = { level = "deny", priority = 2 }
+string_slice     = { level = "deny", priority = 2 }
 
 [build-dependencies]
 prost       = "0.14.4"

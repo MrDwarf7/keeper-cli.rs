@@ -176,6 +176,9 @@ cargo make r -- --help
 If mise is not activated in your shell, prefix these commands with
 `mise exec --`.
 
+Clippy denies panic-prone collection indexing and direct string slicing. Use
+fixed-size data, destructuring, iterators, and checked collection APIs instead.
+
 ## License
 
 MIT. See [LICENSE](LICENSE) for the project license and

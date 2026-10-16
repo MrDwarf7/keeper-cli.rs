@@ -118,20 +118,25 @@ impl Vault {
         }
     }
 
-    fn resolve_parsed_path(&self, cwd: &Location, mut path: VaultPath) -> PathResolution {
-        let mut at = match path.anchor {
+    fn resolve_parsed_path(&self, cwd: &Location, path: VaultPath) -> PathResolution {
+        let VaultPath {
+            anchor,
+            components,
+            trailing_separator: _,
+        } = path;
+        let mut at = match anchor {
             PathAnchor::Root => Location::Root,
             PathAnchor::Current => cwd.clone(),
         };
-        for index in 0..path.components.len() {
-            let Some(next) = self.resolve_part(&at, &path.components[index]) else {
-                path.components.drain(..index);
-                path.anchor = PathAnchor::Current;
-                path.trailing_separator = false;
-                return PathResolution::Partial {
-                    parent: at,
-                    tail:   path,
+        let mut components = components.into_iter();
+        while let Some(component) = components.next() {
+            let Some(next) = self.resolve_part(&at, &component) else {
+                let tail = VaultPath {
+                    anchor:             PathAnchor::Current,
+                    components:         std::iter::once(component).chain(components).collect(),
+                    trailing_separator: false,
                 };
+                return PathResolution::Partial { parent: at, tail };
             };
             at = next;
         }
@@ -195,7 +200,11 @@ impl Vault {
                     break;
                 }
                 if let Some(&cycle_start) = positions.get(&cursor) {
-                    if let Some(root) = path[cycle_start..].iter().min()
+                    if let Some(root) = path
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, uid)| (index >= cycle_start).then_some(uid))
+                        .min()
                         && let Some(folder) = self.folders.get_mut(root)
                     {
                         folder.parent = Location::Root;
@@ -422,14 +431,14 @@ pub(crate) mod tests {
         let titles: Vec<&str> = vault.records.values().map(Record::title).collect();
         assert_eq!(titles.len(), 3, "unreachable record must be dropped: {titles:?}");
         assert!(titles.contains(&"Mine") && titles.contains(&"Shared") && titles.contains(&"Child"));
-        let own = &vault.records[&Uid::from(&r_own[..])];
+        let own = vault.records.get(&Uid::from(r_own.as_slice())).unwrap();
         assert_eq!(own.login(), Some("me"));
         assert!(own.owner);
 
-        let deep = Location::Folder(Uid::from(&f_sub[..]));
-        assert_eq!(vault.subfolders_of(&Location::Root), [Uid::from(&f_user[..])]);
+        let deep = Location::Folder(Uid::from(f_sub.as_slice()));
+        assert_eq!(vault.subfolders_of(&Location::Root), [Uid::from(f_user.as_slice())]);
         assert_eq!(vault.path_of(&deep), "/Work/Data name/Deep");
-        let shared_root = Location::Folder(Uid::from(&f_sf[..]));
+        let shared_root = Location::Folder(Uid::from(f_sf.as_slice()));
         assert_eq!(
             vault
                 .folder(&shared_root)
@@ -445,7 +454,7 @@ pub(crate) mod tests {
                 .and_then(Value::as_str),
             Some("blue")
         );
-        assert_eq!(vault.folder(&deep).unwrap().shared_folder(), Some(&Uid::from(&f_sf[..])));
+        assert_eq!(vault.folder(&deep).unwrap().shared_folder(), Some(&Uid::from(f_sf.as_slice())));
         assert_eq!(vault.records_in(&deep).map(Record::title).collect::<Vec<_>>(), ["Shared"]);
         assert_eq!(vault.records_in(&Location::Root).map(Record::title).collect::<Vec<_>>(), ["Mine"]);
     }
@@ -553,7 +562,7 @@ pub(crate) mod tests {
                 key:        Some(AesKey::random()),
             },
         );
-        let padded_uid = Uid::from(&[9u8; 16][..]);
+        let padded_uid = Uid::from([9u8; 16].as_slice());
         vault.folders.insert(
             padded_uid.clone(),
             Folder {
@@ -676,18 +685,24 @@ pub(crate) mod tests {
             ..Default::default()
         };
         let vault = open_vault(Download(vec![page]), &ring).unwrap();
-        let user = vault.folder(&Location::Folder(Uid::from(&user_uid[..]))).unwrap();
+        let user = vault.folder(&Location::Folder(Uid::from(user_uid.as_slice()))).unwrap();
         assert_eq!(user.name, "Fallback user");
         assert!(user.key.is_some());
-        let locked = vault.folder(&Location::Folder(Uid::from(&locked_uid[..]))).unwrap();
-        assert_eq!(locked.name, Uid::from(&locked_uid[..]).to_string());
+        let locked = vault
+            .folder(&Location::Folder(Uid::from(locked_uid.as_slice())))
+            .unwrap();
+        assert_eq!(locked.name, Uid::from(locked_uid.as_slice()).to_string());
         assert!(locked.key.is_none());
-        let shared = vault.folder(&Location::Folder(Uid::from(&shared_uid[..]))).unwrap();
+        let shared = vault
+            .folder(&Location::Folder(Uid::from(shared_uid.as_slice())))
+            .unwrap();
         assert_eq!(shared.name, "Shared data name");
         assert_eq!(shared.data.get("color").and_then(Value::as_str), Some("purple"));
         assert!(shared.key.is_some());
-        let locked_subfolder = vault.folder(&Location::Folder(Uid::from(&locked_sub_uid[..]))).unwrap();
-        assert_eq!(locked_subfolder.name, Uid::from(&locked_sub_uid[..]).to_string());
+        let locked_subfolder = vault
+            .folder(&Location::Folder(Uid::from(locked_sub_uid.as_slice())))
+            .unwrap();
+        assert_eq!(locked_subfolder.name, Uid::from(locked_sub_uid.as_slice()).to_string());
         assert!(locked_subfolder.key.is_none());
         assert!(vault.records.is_empty(), "unknown record key types must not use folder-key fallback");
     }

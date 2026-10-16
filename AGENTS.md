@@ -65,6 +65,18 @@ user's explicit authorization for those side effects.
   conversions, `FromStr` for parsing, `Display` for rendering, `Default` for
   defaults, and `Iterator`/`IntoIterator` for traversal. For example, bytes to a
   UID belong in a conversion implementation, not a `uid(bytes)` helper.
+- Avoid manual indexing and range slicing in production code and tests,
+  including map and JSON indexing. Encode fixed layouts and cardinality with
+  arrays, destructuring, validated frame types, and iterators before reaching
+  for a positional lookup.
+- For genuinely dynamic access, use the collection's checked API: `get`,
+  `get_mut`, checked splitting, or map `entry` with
+  `or_insert_with`/`or_default`. Handle absence according to the operation's
+  contract and preserve failures as crate errors. Do not replace indexing
+  mechanically with `get().unwrap()` or `get().expect()`, add fake defaults, or
+  hide it behind an `Index` implementation or unchecked access. Tests should
+  assert required fixture shape or entries explicitly. Do not add allocation or
+  copying merely to avoid brackets.
 - Function inputs should almost never be `Option<T>`. Resolve optional input at
   the caller, or model its meaningful states with an enum. Do not pass missing
   or invalid state down the call chain for a callee to guess about.

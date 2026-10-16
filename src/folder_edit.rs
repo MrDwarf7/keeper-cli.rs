@@ -9,7 +9,7 @@ use std::str::FromStr;
 use aes::cipher::block_padding::Pkcs7;
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::auth;
 use crate::commands::{App, Run};
@@ -522,7 +522,7 @@ impl TryFrom<&NewFolder<'_>> for Request {
     type Error = Error;
 
     fn try_from(new: &NewFolder<'_>) -> Result<Self> {
-        let mut data = serde_json::json!({ "name": new.name });
+        let mut data = Map::from_iter([("name".to_owned(), serde_json::json!(new.name))]);
         new.tint.apply(&mut data);
         let (folder_type, name, shared_folder_uid, perms) = match new.kind {
             Kind::User => (Node::UserFolder, None, None, Perms::default()),
@@ -535,7 +535,7 @@ impl TryFrom<&NewFolder<'_>> for Request {
             folder_uid: new.uid.to_string(),
             folder_type,
             key: Sealed::cbc(new.key, new.wrapper)?,
-            data: Sealed::cbc(data.to_string().as_bytes(), new.key)?,
+            data: Sealed::cbc(Value::Object(data).to_string().as_bytes(), new.key)?,
             name,
             parent_uid: match new.parent {
                 Place::In(parent) if !matches!(&parent.kind, FolderKind::SharedFolder) => Some(parent.uid.to_string()),
@@ -639,15 +639,15 @@ impl From<Option<Color>> for Tint {
 }
 
 impl Tint {
-    fn apply(self, data: &mut Value) {
+    fn apply(self, data: &mut Map<String, Value>) {
         match self {
             Self::Keep => {}
             Self::Clear => {
-                if let Some(fields) = data.as_object_mut() {
-                    fields.remove("color");
-                }
+                data.remove("color");
             }
-            Self::Paint(color) => data["color"] = serde_json::json!(color),
+            Self::Paint(color) => {
+                data.insert("color".to_owned(), serde_json::json!(color));
+            }
         }
     }
 }
@@ -665,13 +665,9 @@ impl TryFrom<(&Folder, &Edit)> for Request {
         let key = folder.key.as_ref().ok_or_else(|| {
             Error::Generic(format!("The key of folder {} is not available, so it cannot be changed", folder.uid))
         })?;
-        let mut data = if folder.data.is_object() {
-            folder.data.clone()
-        } else {
-            serde_json::json!({})
-        };
+        let mut data = folder.data.as_object().cloned().unwrap_or_default();
         if let Rename::To(name) = &edit.name {
-            data["name"] = serde_json::json!(name);
+            data.insert("name".to_owned(), serde_json::json!(name));
         }
         edit.tint.apply(&mut data);
         let (name, shared_folder_uid) = match &folder.kind {
@@ -688,7 +684,7 @@ impl TryFrom<(&Folder, &Edit)> for Request {
         Ok(Self::FolderUpdate {
             folder_uid: folder.uid.to_string(),
             folder_type: (&folder.kind).into(),
-            data: Sealed::cbc(data.to_string().as_bytes(), key)?,
+            data: Sealed::cbc(Value::Object(data).to_string().as_bytes(), key)?,
             name,
             shared_folder_uid,
         })
@@ -1083,7 +1079,7 @@ impl Glob {
     pub(crate) fn is_match(&self, text: &str) -> bool {
         let text = self.case.fold(text);
         let (mut pattern_index, mut text_index, mut star, mut retry) = (0, 0, None, 0);
-        while text_index < text.len() {
+        while let Some(&actual) = text.get(text_index) {
             match self.pattern.get(pattern_index) {
                 Some(&'*') => {
                     pattern_index += 1;
@@ -1094,7 +1090,7 @@ impl Glob {
                     pattern_index += 1;
                     text_index += 1;
                 }
-                Some(&expected) if expected == text[text_index] => {
+                Some(&expected) if expected == actual => {
                     pattern_index += 1;
                     text_index += 1;
                 }
@@ -1249,16 +1245,25 @@ mod tests {
             let r3 = uid("R3");
             let p_folder = vault.folders.get_mut(&p).unwrap();
             p_folder.name = "Personal".into();
-            p_folder.key = Some(keys["P"].clone());
+            let Some(p_key) = keys.get("P") else {
+                panic!("fixture is missing key P")
+            };
+            p_folder.key = Some(p_key.clone());
             p_folder.data = json!({ "name": "Personal", "color": "red" });
             let q_folder = vault.folders.get_mut(&q).unwrap();
             q_folder.name = "Sub".into();
-            q_folder.key = Some(keys["Q"].clone());
+            let Some(q_key) = keys.get("Q") else {
+                panic!("fixture is missing key Q")
+            };
+            q_folder.key = Some(q_key.clone());
             q_folder.data = json!({ "name": "Sub" });
             let record = vault.records.get_mut(&r3).unwrap();
             record.kind = RecordKind::Typed;
             record.data = json!({ "title": "Router", "type": "login" });
-            record.key = keys["R3"].clone();
+            let Some(r3_key) = keys.get("R3") else {
+                panic!("fixture is missing key R3")
+            };
+            record.key = r3_key.clone();
             let r2 = uid("R2");
             vault.records.insert(
                 r2.clone(),
@@ -1269,7 +1274,10 @@ mod tests {
                     revision:             1,
                     shared:               false,
                     client_modified_time: 0,
-                    key:                  keys["R2"].clone(),
+                    key:                  match keys.get("R2") {
+                        Some(key) => key.clone(),
+                        None => panic!("fixture is missing key R2"),
+                    },
                     owner:                true,
                     udata:                None,
                 },
@@ -1284,7 +1292,10 @@ mod tests {
                         kind,
                         parent,
                         subfolders: Vec::new(),
-                        key: Some(keys[key].clone()),
+                        key: Some(match keys.get(key) {
+                            Some(key) => key.clone(),
+                            None => panic!("fixture is missing key {key}"),
+                        }),
                         data: json!({ "name": name }),
                     },
                 )
@@ -1330,8 +1341,28 @@ mod tests {
             vault.folders.get_mut(&f).unwrap().subfolders.push(g);
             vault.folders.get_mut(&u).unwrap().subfolders.push(v);
             vault.shared_folders.extend([
-                (s.clone(), shared(&s, "Team", keys["S"].clone())),
-                (t.clone(), shared(&t, "Other", keys["T"].clone())),
+                (
+                    s.clone(),
+                    shared(
+                        &s,
+                        "Team",
+                        match keys.get("S") {
+                            Some(key) => key.clone(),
+                            None => panic!("fixture is missing key S"),
+                        },
+                    ),
+                ),
+                (
+                    t.clone(),
+                    shared(
+                        &t,
+                        "Other",
+                        match keys.get("T") {
+                            Some(key) => key.clone(),
+                            None => panic!("fixture is missing key T"),
+                        },
+                    ),
+                ),
             ]);
             Self {
                 vault,
@@ -1341,7 +1372,10 @@ mod tests {
         }
 
         fn key(&self, label: &str) -> &AesKey {
-            &self.keys[label]
+            match self.keys.get(label) {
+                Some(key) => key,
+                None => panic!("fixture is missing key {label}"),
+            }
         }
 
         fn at(&self, label: &str) -> Place<'_> {
@@ -1352,15 +1386,14 @@ mod tests {
             }
         }
 
-        fn relocate(&self, dst: &str, sources: Vec<Source>, share: Share) -> Result<Value> {
-            let request = Request::try_from(&Relocation {
+        fn relocate(&self, dst: &str, sources: Vec<Source>, share: Share) -> Result<Request> {
+            Request::try_from(&Relocation {
                 vault: &self.vault,
                 data_key: &self.data_key,
                 dst: self.at(dst),
                 sources: &sources,
                 share,
-            })?;
-            Ok(serde_json::to_value(request)?)
+            })
         }
     }
 
@@ -1388,12 +1421,12 @@ mod tests {
         }
     }
 
-    fn open_cbc(sealed: &Value, key: &[u8]) -> Vec<u8> {
-        crypto::decrypt_cbc::<Pkcs7>(&b64_decode(sealed.as_str().unwrap()).unwrap(), key).unwrap()
+    fn open_cbc(sealed: &Sealed, key: &[u8]) -> Vec<u8> {
+        crypto::decrypt_cbc::<Pkcs7>(&b64_decode(&sealed.0).unwrap(), key).unwrap()
     }
 
-    fn open_gcm(sealed: &Value, key: &[u8]) -> Vec<u8> {
-        crypto::decrypt_aes_v2(&b64_decode(sealed.as_str().unwrap()).unwrap(), key).unwrap()
+    fn open_gcm(sealed: &Sealed, key: &[u8]) -> Vec<u8> {
+        crypto::decrypt_aes_v2(&b64_decode(&sealed.0).unwrap(), key).unwrap()
     }
 
     fn record_from(uid: &str, from: &str) -> Source {
@@ -1407,8 +1440,8 @@ mod tests {
         }
     }
 
-    fn new_folder(fx: &Fx, kind: Kind<'_>, wrapper: &[u8], parent: &str, folder_key: &AesKey) -> Value {
-        let request = Request::try_from(&NewFolder {
+    fn new_folder(fx: &Fx, kind: Kind<'_>, wrapper: &[u8], parent: &str, folder_key: &AesKey) -> Request {
+        Request::try_from(&NewFolder {
             uid: &test_uid("N"),
             key: folder_key,
             wrapper,
@@ -1417,24 +1450,37 @@ mod tests {
             kind,
             parent: fx.at(parent),
         })
-        .unwrap();
-        serde_json::to_value(request).unwrap()
+        .unwrap()
     }
 
     #[test]
     fn user_folder_key_and_data_are_wrapped_by_the_expected_keys() {
         let fx = Fx::new();
         let folder_key = AesKey::random();
-        let v = new_folder(&fx, Kind::User, &fx.data_key, "P", &folder_key);
-        assert_eq!(v["command"], "folder_add");
-        assert_eq!(v["folder_type"], "user_folder");
-        assert_eq!(v["parent_uid"], test_uid("P").to_string());
-        assert!(v.get("name").is_none() && v.get("shared_folder_uid").is_none());
-        assert_eq!(open_cbc(&v["key"], &fx.data_key), folder_key.to_vec());
-        let data: Value = serde_json::from_slice(&open_cbc(&v["data"], &folder_key)).unwrap();
+        let request = new_folder(&fx, Kind::User, &fx.data_key, "P", &folder_key);
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire.get("command"), Some(&json!("folder_add")));
+        assert_eq!(wire.get("folder_type"), Some(&json!("user_folder")));
+        assert_eq!(wire.get("parent_uid"), Some(&json!(test_uid("P").to_string())));
+        assert!(wire.get("name").is_none() && wire.get("shared_folder_uid").is_none());
+        let Request::FolderAdd {
+            folder_type, key, data, ..
+        } = request
+        else {
+            panic!("expected folder-add request")
+        };
+        assert_eq!(folder_type, Node::UserFolder);
+        assert_eq!(open_cbc(&key, &fx.data_key), folder_key.to_vec());
+        let data: Value = serde_json::from_slice(&open_cbc(&data, &folder_key)).unwrap();
         assert_eq!(data, json!({ "name": "Reports", "color": "blue" }));
+
         let root = new_folder(&fx, Kind::User, &fx.data_key, "", &folder_key);
-        assert!(root.get("parent_uid").is_none());
+        let root_wire = serde_json::to_value(&root).unwrap();
+        assert!(root_wire.get("parent_uid").is_none());
+        let Request::FolderAdd { parent_uid, .. } = root else {
+            panic!("expected folder-add request")
+        };
+        assert!(parent_uid.is_none());
     }
 
     #[test]
@@ -1447,10 +1493,34 @@ mod tests {
             ..Perms::default()
         };
         let shared = new_folder(&fx, Kind::Shared(perms), &fx.data_key, "", &folder_key);
-        assert_eq!(shared["folder_type"], "shared_folder");
-        assert_eq!(open_cbc(&shared["name"], &folder_key), b"Reports");
-        assert_eq!((&shared["manage_records"], &shared["can_edit"]), (&json!(true), &json!(true)));
-        assert!(shared.get("manage_users").is_none() && shared.get("can_share").is_none());
+        let shared_wire = serde_json::to_value(&shared).unwrap();
+        assert_eq!(shared_wire.get("folder_type"), Some(&json!("shared_folder")));
+        assert_eq!(shared_wire.get("manage_records"), Some(&json!(true)));
+        assert_eq!(shared_wire.get("can_edit"), Some(&json!(true)));
+        assert!(shared_wire.get("manage_users").is_none() && shared_wire.get("can_share").is_none());
+        let Request::FolderAdd {
+            folder_type,
+            name,
+            perms,
+            ..
+        } = shared
+        else {
+            panic!("expected folder-add request")
+        };
+        assert_eq!(folder_type, Node::SharedFolder);
+        assert_eq!(
+            perms,
+            Perms {
+                manage_records: true,
+                can_edit: true,
+                ..Perms::default()
+            }
+        );
+        let Some(name) = name else {
+            panic!("shared folder name should be sealed")
+        };
+        assert_eq!(open_cbc(&name, &folder_key), b"Reports");
+
         let shared_uid = test_uid("S");
         let nested = new_folder(
             &fx,
@@ -1461,31 +1531,47 @@ mod tests {
             "S",
             &folder_key,
         );
-        assert_eq!(nested["folder_type"], "shared_folder_folder");
-        assert_eq!(nested["shared_folder_uid"], shared_uid.to_string());
-        assert_eq!(open_cbc(&nested["key"], fx.key("S")), folder_key.to_vec());
+        let nested_wire = serde_json::to_value(&nested).unwrap();
+        assert_eq!(nested_wire.get("folder_type"), Some(&json!("shared_folder_folder")));
+        assert_eq!(nested_wire.get("shared_folder_uid"), Some(&json!(shared_uid.to_string())));
+        let Request::FolderAdd {
+            folder_type,
+            shared_folder_uid,
+            key,
+            ..
+        } = nested
+        else {
+            panic!("expected folder-add request")
+        };
+        assert_eq!(folder_type, Node::SharedFolderFolder);
+        assert_eq!(shared_folder_uid.as_deref(), Some(shared_uid.to_string().as_str()));
+        assert_eq!(open_cbc(&key, fx.key("S")), folder_key.to_vec());
     }
 
     #[test]
     fn rename_preserves_folder_data_and_rejects_an_unavailable_key() {
         let fx = Fx::new();
-        let folder = &fx.vault.folders[&test_uid("P")];
+        let Some(folder) = fx.vault.folders.get(&test_uid("P")) else {
+            panic!("fixture is missing folder P")
+        };
         let request = |edit: Edit| Request::try_from((folder, &edit)).unwrap();
         let rename = Edit {
             name: Rename::To("Home".into()),
             tint: Tint::Keep,
         };
-        let data: Value =
-            serde_json::from_slice(&open_cbc(&serde_json::to_value(request(rename)).unwrap()["data"], fx.key("P")))
-                .unwrap();
+        let Request::FolderUpdate { data, .. } = request(rename) else {
+            panic!("expected folder-update request")
+        };
+        let data: Value = serde_json::from_slice(&open_cbc(&data, fx.key("P"))).unwrap();
         assert_eq!(data, json!({ "name": "Home", "color": "red" }));
         let clear = Edit {
             name: Rename::Keep,
             tint: Tint::Clear,
         };
-        let data: Value =
-            serde_json::from_slice(&open_cbc(&serde_json::to_value(request(clear)).unwrap()["data"], fx.key("P")))
-                .unwrap();
+        let Request::FolderUpdate { data, .. } = request(clear) else {
+            panic!("expected folder-update request")
+        };
+        let data: Value = serde_json::from_slice(&open_cbc(&data, fx.key("P"))).unwrap();
         assert_eq!(data, json!({ "name": "Personal" }));
         let locked = Folder {
             uid:        test_uid("X"),
@@ -1521,15 +1607,32 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(shared["command"], "move");
-        assert_eq!(shared["move"][0]["can_reshare"], true);
-        assert_eq!(shared["transition_keys"][0]["uid"], test_uid("R3").to_string());
-        assert_eq!(open_gcm(&shared["transition_keys"][0]["key"], fx.key("S")), fx.key("R3").to_vec());
+        let Request::Move {
+            items, transition_keys, ..
+        } = shared
+        else {
+            panic!("expected move request")
+        };
+        let [item] = items.as_slice() else {
+            panic!("expected one moved record")
+        };
+        let [key] = transition_keys.as_slice() else {
+            panic!("expected one transition key")
+        };
+        assert!(item.share.can_reshare);
+        assert_eq!(key.uid, test_uid("R3").to_string());
+        assert_eq!(open_gcm(&key.key, fx.key("S")), fx.key("R3").to_vec());
 
         let legacy = fx
             .relocate("S", vec![record_from("R2", "Q")], Share::default())
             .unwrap();
-        assert_eq!(open_cbc(&legacy["transition_keys"][0]["key"], fx.key("S")), fx.key("R2").to_vec());
+        let Request::Move { transition_keys, .. } = legacy else {
+            panic!("expected move request")
+        };
+        let [key] = transition_keys.as_slice() else {
+            panic!("expected one legacy transition key")
+        };
+        assert_eq!(open_cbc(&key.key, fx.key("S")), fx.key("R2").to_vec());
 
         let same = fx
             .relocate(
@@ -1541,16 +1644,53 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(same.get("transition_keys").is_none());
-        assert!(same["move"][0].get("can_edit").is_none());
+        let same_wire = serde_json::to_value(&same).unwrap();
+        assert!(same_wire.get("transition_keys").is_none());
+        let Some(wire_items) = same_wire.get("move").and_then(Value::as_array) else {
+            panic!("serialized move request is missing its items")
+        };
+        let [wire_item] = wire_items.as_slice() else {
+            panic!("expected one serialized move item")
+        };
+        assert!(wire_item.get("can_edit").is_none());
+        let Request::Move {
+            items, transition_keys, ..
+        } = same
+        else {
+            panic!("expected move request")
+        };
+        let [item] = items.as_slice() else {
+            panic!("expected one moved record")
+        };
+        assert!(!item.share.can_edit);
+        assert!(transition_keys.is_empty());
 
         let leaving = fx.relocate("", vec![record_from("R3", "F")], Share::default()).unwrap();
-        assert_eq!(leaving["move"][0]["from_type"], "shared_folder_folder");
-        assert_eq!(open_gcm(&leaving["transition_keys"][0]["key"], &fx.data_key), fx.key("R3").to_vec());
+        let Request::Move {
+            items, transition_keys, ..
+        } = leaving
+        else {
+            panic!("expected move request")
+        };
+        let [item] = items.as_slice() else {
+            panic!("expected one moved record")
+        };
+        let [key] = transition_keys.as_slice() else {
+            panic!("expected one transition key")
+        };
+        assert_eq!(item.origin.from_type, Node::SharedFolderFolder);
+        assert_eq!(open_gcm(&key.key, &fx.data_key), fx.key("R3").to_vec());
+
         let switching = fx
             .relocate("T", vec![record_from("R3", "F")], Share::default())
             .unwrap();
-        assert_eq!(open_gcm(&switching["transition_keys"][0]["key"], fx.key("T")), fx.key("R3").to_vec());
+        let Request::Move { transition_keys, .. } = switching else {
+            panic!("expected move request")
+        };
+        let [key] = transition_keys.as_slice() else {
+            panic!("expected one transition key")
+        };
+        assert_eq!(open_gcm(&key.key, fx.key("T")), fx.key("R3").to_vec());
     }
 
     #[test]
@@ -1559,33 +1699,49 @@ mod tests {
         let moved = fx
             .relocate("S", vec![Source::Folder(Location::Folder(test_uid("Q")))], Share::default())
             .unwrap();
-        let order: Vec<_> = moved["transition_keys"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|item| item["uid"].as_str().unwrap().to_owned())
-            .collect();
-        let position = |uid: &Uid| {
-            order
-                .iter()
-                .position(|candidate| candidate == &uid.to_string())
-                .unwrap()
+        let Request::Move {
+            items, transition_keys, ..
+        } = moved
+        else {
+            panic!("expected move request")
         };
-        assert!(position(&test_uid("V")) < position(&test_uid("U")));
-        assert!(position(&test_uid("U")) < position(&test_uid("Q")));
-        let record_key = moved["transition_keys"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["uid"] == test_uid("R3").to_string())
-            .unwrap();
-        assert_eq!(open_gcm(&record_key["key"], fx.key("S")), fx.key("R3").to_vec());
+        let [item] = items.as_slice() else {
+            panic!("expected one moved folder")
+        };
+        assert_eq!(item.uid, test_uid("Q").to_string());
+        let [leaf_key, tree_key, root_key, record_key] = transition_keys.as_slice() else {
+            panic!("expected three folder keys and one record key")
+        };
+        assert_eq!(leaf_key.uid, test_uid("V").to_string());
+        assert_eq!(tree_key.uid, test_uid("U").to_string());
+        assert_eq!(root_key.uid, test_uid("Q").to_string());
+        assert_eq!(record_key.uid, test_uid("R3").to_string());
+        assert_eq!(open_gcm(&record_key.key, fx.key("S")), fx.key("R3").to_vec());
 
         let shared = fx
             .relocate("P", vec![Source::Folder(Location::Folder(test_uid("S")))], Share::default())
             .unwrap();
-        assert_eq!(shared["move"][0]["type"], "shared_folder");
-        assert!(shared.get("transition_keys").is_none());
+        let shared_wire = serde_json::to_value(&shared).unwrap();
+        assert!(shared_wire.get("transition_keys").is_none());
+        let Some(wire_items) = shared_wire.get("move").and_then(Value::as_array) else {
+            panic!("serialized move request is missing its items")
+        };
+        let [wire_item] = wire_items.as_slice() else {
+            panic!("expected one serialized move item")
+        };
+        assert_eq!(wire_item.get("type"), Some(&json!("shared_folder")));
+        let Request::Move {
+            items, transition_keys, ..
+        } = shared
+        else {
+            panic!("expected move request")
+        };
+        let [item] = items.as_slice() else {
+            panic!("expected one moved folder")
+        };
+        assert_eq!(item.kind, Node::SharedFolder);
+        assert!(transition_keys.is_empty());
+
         assert!(
             fx.relocate("V", vec![Source::Folder(Location::Folder(test_uid("U")))], Share::default())
                 .unwrap_err()
@@ -1636,19 +1792,53 @@ mod tests {
             name: Rename::To("Squad".into()),
             tint: Tint::Keep,
         };
-        let shared =
-            serde_json::to_value(Request::try_from((&fx.vault.folders[&test_uid("S")], &rename)).unwrap()).unwrap();
-        assert_eq!(shared["folder_type"], "shared_folder");
-        assert_eq!(shared["shared_folder_uid"], test_uid("S").to_string());
-        assert_eq!(open_cbc(&shared["name"], fx.key("S")), b"Squad");
-        assert_eq!(open_cbc(&shared["data"], fx.key("S")), br#"{"name":"Squad"}"#);
+        let Some(shared_folder) = fx.vault.folders.get(&test_uid("S")) else {
+            panic!("fixture is missing shared folder S")
+        };
+        let shared = Request::try_from((shared_folder, &rename)).unwrap();
+        let shared_wire = serde_json::to_value(&shared).unwrap();
+        assert_eq!(shared_wire.get("folder_type"), Some(&json!("shared_folder")));
+        assert_eq!(shared_wire.get("shared_folder_uid"), Some(&json!(test_uid("S").to_string())));
+        let Request::FolderUpdate {
+            folder_type,
+            shared_folder_uid,
+            name,
+            data,
+            ..
+        } = shared
+        else {
+            panic!("expected folder-update request")
+        };
+        assert_eq!(folder_type, Node::SharedFolder);
+        assert_eq!(shared_folder_uid.as_deref(), Some(test_uid("S").to_string().as_str()));
+        let Some(name) = name else {
+            panic!("shared folder name should be sealed")
+        };
+        assert_eq!(open_cbc(&name, fx.key("S")), b"Squad");
+        assert_eq!(open_cbc(&data, fx.key("S")), br#"{"name":"Squad"}"#);
 
-        let nested =
-            serde_json::to_value(Request::try_from((&fx.vault.folders[&test_uid("F")], &rename)).unwrap()).unwrap();
-        assert_eq!(nested["folder_type"], "shared_folder_folder");
-        assert!(nested.get("name").is_none());
-        assert_eq!(nested["shared_folder_uid"], test_uid("S").to_string());
-        assert_eq!(open_cbc(&nested["data"], fx.key("F")), br#"{"name":"Squad"}"#);
+        let Some(nested_folder) = fx.vault.folders.get(&test_uid("F")) else {
+            panic!("fixture is missing nested folder F")
+        };
+        let nested = Request::try_from((nested_folder, &rename)).unwrap();
+        let nested_wire = serde_json::to_value(&nested).unwrap();
+        assert_eq!(nested_wire.get("folder_type"), Some(&json!("shared_folder_folder")));
+        assert!(nested_wire.get("name").is_none());
+        assert_eq!(nested_wire.get("shared_folder_uid"), Some(&json!(test_uid("S").to_string())));
+        let Request::FolderUpdate {
+            folder_type,
+            shared_folder_uid,
+            name,
+            data,
+            ..
+        } = nested
+        else {
+            panic!("expected folder-update request")
+        };
+        assert_eq!(folder_type, Node::SharedFolderFolder);
+        assert!(name.is_none());
+        assert_eq!(shared_folder_uid.as_deref(), Some(test_uid("S").to_string().as_str()));
+        assert_eq!(open_cbc(&data, fx.key("F")), br#"{"name":"Squad"}"#);
     }
 
     #[test]
@@ -1716,32 +1906,47 @@ mod tests {
 
     #[test]
     fn delete_requests_and_predelete_answers_match_wire_format() {
-        assert_eq!(
-            serde_json::to_value(Request::Delete {
-                pre_delete_token: "t".into(),
-            })
-            .unwrap(),
-            json!({ "command": "delete", "pre_delete_token": "t" })
-        );
-        assert_eq!(
-            serde_json::to_value(Request::PreDelete { objects: Vec::new() }).unwrap(),
-            json!({ "command": "pre_delete", "objects": [] })
-        );
+        let delete = Request::Delete {
+            pre_delete_token: "t".into(),
+        };
+        assert_eq!(serde_json::to_value(&delete).unwrap(), json!({ "command": "delete", "pre_delete_token": "t" }));
+        let Request::Delete { pre_delete_token } = delete else {
+            panic!("expected delete request")
+        };
+        assert_eq!(pre_delete_token, "t");
+
+        let pre_delete = Request::PreDelete { objects: Vec::new() };
+        assert_eq!(serde_json::to_value(&pre_delete).unwrap(), json!({ "command": "pre_delete", "objects": [] }));
+        let Request::PreDelete { objects } = pre_delete else {
+            panic!("expected pre-delete request")
+        };
+        assert!(objects.is_empty());
+
         let answer = json!({ "result": "success", "pre_delete_response": {
             "pre_delete_token": "abc", "would_delete": { "deletion_summary": ["1 folder", "2 records"] }
         }});
         let parsed: PreDeleted = serde_json::from_value(answer).unwrap();
         assert_eq!(parsed.pre_delete_response.pre_delete_token, "abc");
-        assert_eq!(parsed.pre_delete_response.would_delete.deletion_summary, ["1 folder", "2 records"]);
+        let [folder_summary, record_summary] = parsed.pre_delete_response.would_delete.deletion_summary.as_slice()
+        else {
+            panic!("expected folder and record deletion summaries")
+        };
+        assert_eq!(folder_summary, "1 folder");
+        assert_eq!(record_summary, "2 records");
     }
 
     #[test]
     fn deletion_origin_and_paths_match_commander() {
         let fx = Fx::new();
-        let folder = &fx.vault.folders[&test_uid("F")];
-        let deletion = serde_json::to_value(Deletion::from((&fx.vault, folder))).unwrap();
-        assert_eq!(deletion["delete_resolution"], "unlink");
-        assert_eq!(deletion["from_type"], "shared_folder_folder");
+        let Some(folder) = fx.vault.folders.get(&test_uid("F")) else {
+            panic!("fixture is missing nested folder F")
+        };
+        let deletion = Deletion::from((&fx.vault, folder));
+        let wire = serde_json::to_value(&deletion).unwrap();
+        assert_eq!(wire.get("delete_resolution"), Some(&json!("unlink")));
+        assert_eq!(wire.get("from_type"), Some(&json!("shared_folder_folder")));
+        assert!(matches!(deletion.delete_resolution, Resolution::Unlink));
+        assert_eq!(deletion.origin.from_type, Node::SharedFolderFolder);
         assert!(Glob::new("*prod*db", Case::Ignore).is_match("My prod DB"));
         assert!(!Glob::new("Old*", Case::Exact).is_match("Bold"));
         assert!(Glob::new("a?c", Case::Exact).is_match("abc"));

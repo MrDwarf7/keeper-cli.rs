@@ -18,7 +18,7 @@ fn main() {
 // The descriptor set is lifted from Commander by tools/extract-protos.ts; compiling it
 // directly means no protoc install and field numbers identical to Keeper's own schema.
 fn compile_keeper_protos() {
-    let fds = prost_types::FileDescriptorSet::decode(&include_bytes!("proto/keeper.fds.bin")[..])
+    let fds = prost_types::FileDescriptorSet::decode(include_bytes!("proto/keeper.fds.bin").as_slice())
         .expect("proto/keeper.fds.bin is not a valid FileDescriptorSet");
     prost_build::Config::new()
         .include_file("keeper_protos.rs")
@@ -36,11 +36,30 @@ fn embed_windows_metadata() {
     res.set("CompanyName", "https://github.com/MrDwarf7");
     res.set("ProductName", name);
 
-    let mut sv: Vec<&str> = vers.split('.').collect();
-    while sv.len() < 4 {
-        sv.push("0");
-    }
-    let file_version = format!("{}, {}, {}, {}", sv[0], sv[1], sv[2], sv[3]);
+    let mut components = vers.split('.');
+    let [major, minor, patch, build] = [
+        components
+            .next()
+            .expect("CARGO_PKG_VERSION is missing its major component")
+            .parse::<u16>()
+            .expect("CARGO_PKG_VERSION major component is not a valid Windows version number"),
+        components
+            .next()
+            .expect("CARGO_PKG_VERSION is missing its minor component")
+            .parse::<u16>()
+            .expect("CARGO_PKG_VERSION minor component is not a valid Windows version number"),
+        components
+            .next()
+            .expect("CARGO_PKG_VERSION is missing its patch component")
+            .parse::<u16>()
+            .expect("CARGO_PKG_VERSION patch component is not a valid Windows version number"),
+        components
+            .next()
+            .unwrap_or("0")
+            .parse::<u16>()
+            .expect("CARGO_PKG_VERSION build component is not a valid Windows version number"),
+    ];
+    let file_version = format!("{major}, {minor}, {patch}, {build}");
     res.set("FileVersion", file_version.as_str());
 
     res.compile().expect("Failed to compile Windows version metadata");

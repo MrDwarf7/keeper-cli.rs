@@ -68,7 +68,7 @@ impl Run for Search {
                     .values()
                     .filter(|folder| matches_terms(&format!("{} {}", folder.uid, folder.name), &terms))
                 {
-                    folders.push(vec![folder.uid.to_string(), folder.name.clone()]);
+                    folders.push([folder.uid.to_string(), folder.name.clone()]);
                 }
                 if !folders.rows.is_empty() {
                     println!("\nShared Folders:");
@@ -81,7 +81,7 @@ impl Run for Search {
                     .values()
                     .filter(|team| matches_terms(&format!("{} {}", team.uid, team.name), &terms))
                 {
-                    teams.push(vec![team.uid.to_string(), team.name.clone()]);
+                    teams.push([team.uid.to_string(), team.name.clone()]);
                 }
                 if !teams.rows.is_empty() {
                     println!("\nTeams:");
@@ -175,13 +175,7 @@ impl Run for Get {
             objects => {
                 let mut table = Table::new(&["uid", "type", "name"]);
                 for object in objects {
-                    let value = serde_json::Value::from(object);
-                    table.push(
-                        ["uid", "type", "name"]
-                            .into_iter()
-                            .map(|key| value[key].as_str().unwrap_or_default().to_owned())
-                            .collect(),
-                    );
+                    table.push(object.table_row());
                 }
                 table.print(match self.format {
                     DetailFormat::Detail => Format::Table,
@@ -198,6 +192,23 @@ enum Object<'a> {
     Folder(&'a Folder),
     SharedFolder(&'a SharedFolder),
     Team(&'a Team),
+}
+
+impl Object<'_> {
+    fn table_row(&self) -> [String; 3] {
+        match self {
+            Self::Record(record) => {
+                [
+                    record.uid.to_string(),
+                    record.record_type().to_owned(),
+                    record.title().to_owned(),
+                ]
+            }
+            Self::Folder(folder) => [folder.uid.to_string(), "folder".to_owned(), folder.name.clone()],
+            Self::SharedFolder(folder) => [folder.uid.to_string(), "shared_folder".to_owned(), folder.name.clone()],
+            Self::Team(team) => [team.uid.to_string(), "team".to_owned(), team.name.clone()],
+        }
+    }
 }
 
 impl From<&Object<'_>> for serde_json::Value {
@@ -241,7 +252,7 @@ impl Run for ListSf {
             .values()
             .filter(|folder| matches_terms(&format!("{} {}", folder.uid, folder.name), &terms))
         {
-            table.push(vec![folder.uid.to_string(), folder.name.clone()]);
+            table.push([folder.uid.to_string(), folder.name.clone()]);
         }
         table.print(self.format);
         Ok(())
@@ -268,7 +279,7 @@ impl Run for ListTeam {
             .filter_map(|(enabled, label)| enabled.then_some(label))
             .collect::<Vec<_>>()
             .join(", ");
-            table.push(vec![team.uid.to_string(), team.name.clone(), restricts]);
+            table.push([team.uid.to_string(), team.name.clone(), restricts]);
         }
         table.print(self.format);
         Ok(())
@@ -324,7 +335,7 @@ fn records_table(records: Vec<&Record>, detail: Detail, format: Format) {
         } else {
             Clipped(&description, 40).to_string()
         };
-        table.push(vec![
+        table.push([
             record.uid.to_string(),
             record.record_type().to_owned(),
             title,
@@ -389,7 +400,7 @@ fn list_totp(vault: &crate::vault::Vault) -> crate::Result<()> {
                 || ("invalid TOTP".to_owned(), String::new()),
                 |code| (code.to_string(), format!("{}s", code.remaining)),
             );
-        table.push(vec![
+        table.push([
             record.uid.to_string(),
             Clipped(record.title(), 40).to_string(),
             code,

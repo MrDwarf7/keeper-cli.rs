@@ -56,7 +56,7 @@ impl Run for Generate {
             Format::Json => println!("{}", serde_json::to_string_pretty(&passwords)?),
             Format::Table => {
                 let mut table = Table::new(&["password"]);
-                table.extend(passwords.into_iter().map(|password| vec![password]));
+                table.extend(passwords.into_iter().map(|password| [password]));
                 table.print(Format::Table);
             }
         }

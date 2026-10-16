@@ -78,12 +78,14 @@ pub fn encrypt_cbc<P: aes::cipher::block_padding::Padding<aes::cipher::consts::U
     let mut out = vec![0u8; capacity];
     let mut iv = [0u8; 16];
     OsRng.fill_bytes(&mut iv);
-    out[..16].copy_from_slice(&iv);
-    out[16..16 + data.len()].copy_from_slice(data);
+    let (iv_slot, body) = out.split_at_mut(16);
+    iv_slot.copy_from_slice(&iv);
+    let (body_data, _) = body.split_at_mut(data.len());
+    body_data.copy_from_slice(data);
     let enc =
         cbc::Encryptor::<Aes256>::new_from_slices(key, &iv).map_err(|_| Error::Crypto("bad AES key length".into()))?;
     let len = enc
-        .encrypt_padded_mut::<P>(&mut out[16..], data.len())
+        .encrypt_padded_mut::<P>(body, data.len())
         .map_err(|_| Error::Crypto("AES-CBC input is not block aligned".into()))?
         .len();
     out.truncate(16 + len);
@@ -218,7 +220,10 @@ pub fn decrypt_rsa(data: &[u8], key: &RsaPrivateKey) -> Result<Vec<u8>> {
     let size = key.size();
     let padded;
     let data = if data.len() < size {
-        padded = [vec![0u8; size - data.len()], data.to_vec()].concat();
+        let mut bytes = Vec::with_capacity(size);
+        bytes.resize(size - data.len(), 0);
+        bytes.extend_from_slice(data);
+        padded = bytes;
         &padded
     } else {
         data
@@ -246,20 +251,36 @@ pub fn decrypt_encryption_params(params: &[u8], password: &str) -> Result<Vec<u8
     if params.len() != 100 {
         return Err(Error::Crypto("invalid encryption params length".into()));
     }
-    let iterations = u32::from_be_bytes([0, params[1], params[2], params[3]]);
-    let key = pbkdf2::pbkdf2_hmac_array::<Sha256, 32>(password.as_bytes(), &params[4..20], iterations);
-    let doubled = decrypt_cbc::<NoPadding>(&params[20..], &key)?;
-    if doubled.len() != 64 || doubled[..32] != doubled[32..] {
+    let (_, params) = params
+        .split_first()
+        .ok_or_else(|| Error::Crypto("invalid encryption params length".into()))?;
+    let (iterations, params) = params
+        .split_at_checked(3)
+        .ok_or_else(|| Error::Crypto("invalid encryption params length".into()))?;
+    let (salt, ciphertext) = params
+        .split_at_checked(16)
+        .ok_or_else(|| Error::Crypto("invalid encryption params length".into()))?;
+    let [iteration_0, iteration_1, iteration_2] = iterations else {
+        return Err(Error::Crypto("invalid encryption params length".into()));
+    };
+    let iterations = u32::from_be_bytes([0, *iteration_0, *iteration_1, *iteration_2]);
+    let key = pbkdf2::pbkdf2_hmac_array::<Sha256, 32>(password.as_bytes(), salt, iterations);
+    let doubled = decrypt_cbc::<NoPadding>(ciphertext, &key)?;
+    let (data_key, mirror) = doubled
+        .split_at_checked(32)
+        .ok_or_else(|| Error::Crypto("data key mirror check failed (wrong password?)".into()))?;
+    if mirror.len() != 32 || data_key != mirror {
         return Err(Error::Crypto("data key mirror check failed (wrong password?)".into()));
     }
-    Ok(doubled[..32].to_vec())
+    Ok(data_key.to_vec())
 }
 
 #[cfg(test)]
 pub fn create_encryption_params(password: &str, salt: &[u8], iterations: u32, data_key: &[u8]) -> Result<Vec<u8>> {
     let key = pbkdf2::pbkdf2_hmac_array::<Sha256, 32>(password.as_bytes(), salt, iterations);
     let mut out = vec![1u8];
-    out.extend_from_slice(&iterations.to_be_bytes()[1..]);
+    let [_, iteration_0, iteration_1, iteration_2] = iterations.to_be_bytes();
+    out.extend_from_slice(&[iteration_0, iteration_1, iteration_2]);
     out.extend_from_slice(salt);
     out.extend(encrypt_cbc::<NoPadding>(&[data_key, data_key].concat(), &key)?);
     Ok(out)
@@ -275,7 +296,7 @@ mod tests {
     fn cbc_and_gcm_roundtrip_and_reject_wrong_key() {
         let key = random_bytes(32);
         let other = random_bytes(32);
-        for msg in [&b""[..], b"x", &[7u8; 16], &[9u8; 33]] {
+        for msg in [b"".as_slice(), b"x", &[7u8; 16], &[9u8; 33]] {
             let cbc = encrypt_cbc::<Pkcs7>(msg, &key).unwrap();
             assert_eq!(cbc.len() % 16, 0);
             assert_eq!(decrypt_cbc::<Pkcs7>(&cbc, &key).unwrap(), msg);
@@ -289,7 +310,11 @@ mod tests {
             assert_eq!(decrypt_aes_v2_in_place(&mut gcm_in_place, &key).unwrap(), msg);
         }
         let mut gcm_frame = vec![0; 12 + 3 + 16];
-        gcm_frame[12..15].copy_from_slice(b"abc");
+        let (_, frame_body) = gcm_frame.split_at_mut_checked(12).expect("GCM fixture has nonce space");
+        let (body, _) = frame_body
+            .split_at_mut_checked(3)
+            .expect("GCM fixture has plaintext space");
+        body.copy_from_slice(b"abc");
         encrypt_aes_v2_in_place(&mut gcm_frame, &key).unwrap();
         assert_eq!(decrypt_aes_v2_in_place(&mut gcm_frame, &key).unwrap(), b"abc");
     }
@@ -325,15 +350,21 @@ mod tests {
     }
 
     #[test]
+    fn encryption_params_reject_truncated_frame() {
+        assert!(decrypt_encryption_params(&[0; 99], "hunter2").is_err());
+    }
+
+    #[test]
     fn rsa_decrypt_tolerates_stripped_leading_zeros() {
         let private = RsaPrivateKey::new(&mut OsRng, 1024).unwrap();
         let public = RsaPublicKey::from(&private);
         let sealed = loop {
             let c = public.encrypt(&mut OsRng, Pkcs1v15Encrypt, b"record key").unwrap();
-            if c[0] == 0 {
+            if c.first() == Some(&0) {
                 break c;
             }
         };
-        assert_eq!(decrypt_rsa(&sealed[1..], &private).unwrap(), b"record key");
+        let (_, stripped_leading_zero) = sealed.split_first().expect("RSA ciphertext is nonempty");
+        assert_eq!(decrypt_rsa(stripped_leading_zero, &private).unwrap(), b"record key");
     }
 }

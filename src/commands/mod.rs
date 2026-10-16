@@ -158,21 +158,20 @@ impl From<bool> for Detail {
 }
 /// Rows with snake_case column keys: JSON objects keyed by them, or a numbered text table
 /// titled from them.
-pub struct Table {
-    columns: &'static [&'static str],
-    rows:    Vec<Vec<String>>,
+pub struct Table<const N: usize> {
+    columns: [&'static str; N],
+    rows:    Vec<[String; N]>,
 }
 
-impl Table {
-    pub fn new(columns: &'static [&'static str]) -> Self {
+impl<const N: usize> Table<N> {
+    pub fn new(columns: &'static [&'static str; N]) -> Self {
         Self {
-            columns,
-            rows: Vec::new(),
+            columns: *columns,
+            rows:    Vec::new(),
         }
     }
 
-    pub fn push(&mut self, row: Vec<String>) {
-        debug_assert_eq!(row.len(), self.columns.len());
+    pub fn push(&mut self, row: [String; N]) {
         self.rows.push(row);
     }
 
@@ -184,8 +183,8 @@ impl Table {
     }
 }
 
-impl From<&Table> for Value {
-    fn from(table: &Table) -> Self {
+impl<const N: usize> From<&Table<N>> for Value {
+    fn from(table: &Table<N>) -> Self {
         Value::Array(
             table
                 .rows
@@ -205,44 +204,32 @@ impl From<&Table> for Value {
     }
 }
 
-impl Extend<Vec<String>> for Table {
-    fn extend<I: IntoIterator<Item = Vec<String>>>(&mut self, rows: I) {
-        for row in rows {
-            debug_assert_eq!(row.len(), self.columns.len());
-            self.rows.push(row);
-        }
+impl<const N: usize> Extend<[String; N]> for Table<N> {
+    fn extend<I: IntoIterator<Item = [String; N]>>(&mut self, rows: I) {
+        self.rows.extend(rows);
     }
 }
 
-impl std::fmt::Display for Table {
+impl<const N: usize> std::fmt::Display for Table<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.rows.is_empty() {
             return writeln!(f, "No results");
         }
-        let headers: Vec<String> = self
-            .columns
-            .iter()
-            .map(|column| ColumnTitle(column).to_string())
-            .collect();
-        let widths: Vec<usize> = headers
-            .iter()
-            .enumerate()
-            .map(|(column, header)| {
-                self.rows
-                    .iter()
-                    .map(|row| row[column].chars().count())
-                    .chain([header.chars().count()])
-                    .max()
-                    .unwrap_or_default()
-            })
-            .collect();
+        let headers = self.columns.map(|column| ColumnTitle(column).to_string());
+        let mut widths = headers.each_ref().map(|header| header.chars().count());
+        for row in &self.rows {
+            for (width, cell) in widths.iter_mut().zip(row) {
+                *width = (*width).max(cell.chars().count());
+            }
+        }
         let number_width = self.rows.len().to_string().len();
         write!(f, "{:<number_width$}", "#")?;
-        for (column, header) in headers.iter().enumerate() {
-            if column + 1 == headers.len() {
+        let mut columns = headers.iter().zip(widths.iter()).peekable();
+        while let Some((header, width)) = columns.next() {
+            if columns.peek().is_none() {
                 write!(f, "  {header}")?;
             } else {
-                write!(f, "  {header:<width$}", width = widths[column])?;
+                write!(f, "  {header:<width$}", width = *width)?;
             }
         }
         writeln!(f)?;
@@ -253,11 +240,12 @@ impl std::fmt::Display for Table {
         writeln!(f)?;
         for (index, row) in self.rows.iter().enumerate() {
             write!(f, "{:<number_width$}", index + 1)?;
-            for (column, cell) in row.iter().enumerate() {
-                if column + 1 == row.len() {
+            let mut cells = row.iter().zip(widths.iter()).peekable();
+            while let Some((cell, width)) = cells.next() {
+                if cells.peek().is_none() {
                     write!(f, "  {cell}")?;
                 } else {
-                    write!(f, "  {cell:<width$}", width = widths[column])?;
+                    write!(f, "  {cell:<width$}", width = *width)?;
                 }
             }
             writeln!(f)?;
@@ -327,5 +315,20 @@ mod tests {
     fn clipped_counts_characters_not_bytes() {
         assert_eq!(Clipped("héllo wörld", 8).to_string(), "héllo...");
         assert_eq!(Clipped("short", 8).to_string(), "short");
+    }
+    #[test]
+    fn table_keeps_fixed_columns_in_text_and_json() {
+        let mut table = Table::new(&["uid", "name"]);
+        table.push(["a".to_owned(), "Ada".to_owned()]);
+        table.push(["bb".to_owned(), "Li".to_owned()]);
+
+        assert_eq!(table.to_string(), "#  UID  Name\n-  ---  ----\n1  a    Ada\n2  bb   Li\n");
+        assert_eq!(
+            Value::from(&table),
+            serde_json::json!([
+                {"uid": "a", "name": "Ada"},
+                {"uid": "bb", "name": "Li"}
+            ])
+        );
     }
 }

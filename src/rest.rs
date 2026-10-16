@@ -147,15 +147,23 @@ impl RestContext {
     fn seal_transmission_key(&self) -> Result<Vec<u8>> {
         match self.server_key_id {
             id @ 1..=6 => {
-                let public_key = rsa::RsaPublicKey::from_pkcs1_der(&b64_decode(RSA_SERVER_KEYS[id as usize - 1])?)
-                    .map_err(|_| Error::Crypto("invalid RSA public key".into()))?;
+                let public_key = rsa::RsaPublicKey::from_pkcs1_der(&b64_decode(
+                    RSA_SERVER_KEYS
+                        .get((id - 1) as usize)
+                        .ok_or_else(|| Error::api("invalid_key_id", format!("Key ID \"{id}\" is not valid.")))?,
+                )?)
+                .map_err(|_| Error::Crypto("invalid RSA public key".into()))?;
                 public_key
                     .encrypt(&mut OsRng, rsa::Pkcs1v15Encrypt, &self.transmission_key)
                     .map_err(|_| Error::Crypto("RSA encryption failed".into()))
             }
             id @ 7..=18 => {
-                let public_key = p256::PublicKey::from_sec1_bytes(&b64_decode(EC_SERVER_KEYS[id as usize - 7])?)
-                    .map_err(|_| Error::Crypto("invalid EC public key".into()))?;
+                let public_key = p256::PublicKey::from_sec1_bytes(&b64_decode(
+                    EC_SERVER_KEYS
+                        .get((id - 7) as usize)
+                        .ok_or_else(|| Error::api("invalid_key_id", format!("Key ID \"{id}\" is not valid.")))?,
+                )?)
+                .map_err(|_| Error::Crypto("invalid EC public key".into()))?;
                 crypto::encrypt_ec(&self.transmission_key, &public_key)
             }
             id => Err(Error::api("invalid_key_id", format!("Key ID \"{id}\" is not valid."))),
@@ -262,17 +270,19 @@ fn parse_failure(body: &[u8]) -> ApiFailure {
 /// waits less than an exponential 30s backoff.
 fn throttle_delay(message: &str, attempt: u32) -> u64 {
     let lower = message.to_lowercase();
-    let words: Vec<&str> = lower.split_whitespace().collect();
-    let hinted = words.windows(2).find_map(|w| {
-        let n: u64 = w[0].parse().ok()?;
-        if w[1].starts_with("minute") {
-            Some(n * 60)
-        } else if w[1].starts_with("second") {
-            Some(n)
-        } else {
-            None
-        }
-    });
+    let hinted = lower
+        .split_whitespace()
+        .zip(lower.split_whitespace().skip(1))
+        .find_map(|(number, unit)| {
+            let n: u64 = number.parse().ok()?;
+            if unit.starts_with("minute") {
+                Some(n * 60)
+            } else if unit.starts_with("second") {
+                Some(n)
+            } else {
+                None
+            }
+        });
     hinted.unwrap_or(60).min(300).max(30 * 2u64.pow(attempt - 1))
 }
 

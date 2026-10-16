@@ -91,7 +91,13 @@ fn list_one(vault: &crate::vault::Vault, folder: &Location, pattern: &Glob, list
     let folders: Vec<_> = vault
         .subfolders_of(folder)
         .iter()
-        .filter(|uid| pattern.is_match(&vault.folders[*uid].name) || pattern.is_match(uid.as_ref()))
+        .filter_map(|uid| {
+            vault
+                .folders
+                .get(uid)
+                .filter(|folder| pattern.is_match(&folder.name) || pattern.is_match(uid.as_ref()))
+                .map(|folder| (uid, folder))
+        })
         .collect();
     let mut records: Vec<_> = vault
         .records_in(folder)
@@ -106,8 +112,8 @@ fn list_one(vault: &crate::vault::Vault, folder: &Location, pattern: &Glob, list
     match detail {
         Detail::Compact => {
             if !matches!(listing, Listing::Records) {
-                for uid in &folders {
-                    println!("{}/", vault.folders[*uid].name);
+                for (_, folder) in &folders {
+                    println!("{}/", folder.name);
                 }
             }
             if !matches!(listing, Listing::Folders) {
@@ -119,21 +125,20 @@ fn list_one(vault: &crate::vault::Vault, folder: &Location, pattern: &Glob, list
         Detail::Full => {
             if !matches!(listing, Listing::Records) {
                 let mut table = Table::new(&["folder_uid", "name", "flags"]);
-                for uid in folders {
-                    let folder = &vault.folders[uid];
+                for (uid, folder) in folders {
                     let flags = match folder.kind {
                         FolderKind::User => "",
                         FolderKind::SharedFolder => "S",
                         FolderKind::SharedFolderFolder { .. } => "s",
                     };
-                    table.push(vec![uid.to_string(), folder.name.clone(), flags.into()]);
+                    table.push([uid.to_string(), folder.name.clone(), flags.into()]);
                 }
                 table.print(crate::cli::Format::Table);
             }
             if !matches!(listing, Listing::Folders) {
                 let mut table = Table::new(&["record_uid", "type", "title", "description", "shared"]);
                 for record in records {
-                    table.push(vec![
+                    table.push([
                         record.uid.to_string(),
                         record.record_type().into(),
                         Clipped(record.title(), 40).to_string(),
@@ -223,16 +228,19 @@ fn label(name: &str, location: &Location, labels: Labels) -> String {
 }
 
 fn render_tree(vault: &crate::vault::Vault, folder: &Location, prefix: &str, contents: Contents, labels: Labels) {
-    let folders = vault.subfolders_of(folder);
+    let folders: Vec<_> = vault
+        .subfolders_of(folder)
+        .iter()
+        .filter_map(|uid| vault.folders.get(uid).map(|folder| (uid, folder)))
+        .collect();
     let mut records: Vec<_> = match contents {
         Contents::Folders => Vec::new(),
         Contents::FoldersAndRecords => vault.records_in(folder).collect(),
     };
     records.sort_by_cached_key(|record| record.title().to_lowercase());
     let total = folders.len() + records.len();
-    for (index, uid) in folders.iter().enumerate() {
+    for (index, (uid, folder)) in folders.iter().enumerate() {
         let last = index + 1 == total;
-        let folder = &vault.folders[uid];
         let shared = if matches!(folder.kind, FolderKind::SharedFolder) {
             " [Shared]"
         } else {
@@ -241,14 +249,14 @@ fn render_tree(vault: &crate::vault::Vault, folder: &Location, prefix: &str, con
         println!(
             "{prefix}{}{shared}",
             if last {
-                format!("└── {}", label(&folder.name, &Location::Folder(uid.clone()), labels))
+                format!("└── {}", label(&folder.name, &Location::Folder((*uid).clone()), labels))
             } else {
-                format!("├── {}", label(&folder.name, &Location::Folder(uid.clone()), labels))
+                format!("├── {}", label(&folder.name, &Location::Folder((*uid).clone()), labels))
             }
         );
         render_tree(
             vault,
-            &Location::Folder(uid.clone()),
+            &Location::Folder((*uid).clone()),
             &format!("{prefix}{}", if last { "    " } else { "│   " }),
             contents,
             labels,

@@ -35,6 +35,12 @@ contents with that same key. Registration, transfer, and record linking use
 those values directly, so file-to-key pairing cannot drift between parallel
 collections.
 
+Table columns and rows share a const-generic width, so ragged rows cannot be
+inserted. Fixed byte layouts use destructuring or checked splits; dynamic
+lookups handle missing entries explicitly. TOTP truncation accepts only
+supported fixed-size digests, so code generation has no missing-digest failure
+state.
+
 Protocol behavior is derived from descriptors embedded in Commander's generated
 Python modules and from Commander's source.
 

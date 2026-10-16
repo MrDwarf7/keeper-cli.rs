@@ -504,13 +504,16 @@ impl DownloadResponse {
                 })
             }
             Self::Legacy(response) => {
-                let grant = response["downloads"]
-                    .as_array()
+                let grant = response
+                    .get("downloads")
+                    .and_then(Value::as_array)
                     .and_then(|downloads| downloads.get(index))
                     .ok_or_else(|| invalid("is missing from the positional download response"))?;
-                let Some(url) = grant.get("url").and_then(Value::as_str).filter(|url| !url.is_empty()) else {
-                    return Err(invalid("was refused or has malformed positional grant data"));
-                };
+                let url = grant
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .filter(|url| !url.is_empty())
+                    .ok_or_else(|| invalid("was refused or has malformed positional grant data"))?;
                 Ok(Ticket {
                     url:    url.to_owned(),
                     cipher: Cipher::Cbc,
@@ -552,7 +555,10 @@ fn legacy_tickets(
         "file_ids": attachments.iter().map(|attachment| attachment.id.as_str()).collect::<Vec<_>>(),
     });
     if let Some(folder) = access_folder(vault, record) {
-        rq["shared_folder_uid"] = folder.into();
+        rq.as_object_mut()
+            .ok_or_else(|| Error::Generic("malformed download request".into()))?
+            .entry("shared_folder_uid")
+            .or_insert_with(|| Value::from(folder));
     }
     Ok(DownloadResponse::Legacy(session.execute_v2(rq)?))
 }
@@ -776,12 +782,12 @@ impl Run for UploadAttachment {
             .rest
             .execute("vault/records_update", &session.session_token, &rq)?;
         let updated = RecordsModifyResponse::decode(body.as_slice())?;
-        if let Some(status) = updated
+        let status = updated
             .records
             .iter()
-            .find(|status| status.record_uid == rq.records[0].record_uid)
-            .filter(|status| status.status != RecordModifyResult::RsSuccess as i32)
-        {
+            .find(|status| rq.records.iter().any(|request| request.record_uid == status.record_uid))
+            .ok_or_else(|| Error::Generic(format!("Updating record {}: missing response status.", record.uid)))?;
+        if status.status != RecordModifyResult::RsSuccess as i32 {
             let name = RecordModifyResult::try_from(status.status).map_or("UNKNOWN", |result| result.as_str_name());
             return Err(Error::api(name, status.message.clone()));
         }
@@ -862,7 +868,7 @@ fn link_request(record: &Record, files: &[UploadFile], key_type: RecordKeyType) 
     let refs = files.iter().map(|file| Value::from(b64_encode(&file.uid)));
     let listed = fields
         .iter_mut()
-        .find(|field| field["type"] == "fileRef")
+        .find(|field| field.get("type").and_then(Value::as_str) == Some("fileRef"))
         .and_then(|field| field.get_mut("value"))
         .and_then(Value::as_array_mut);
     match listed {
@@ -968,15 +974,25 @@ mod tests {
             1,
         );
         let vault = vault_of([parent, f1, f2, other]);
-        let found = Attachment::of(&vault, &vault.records[&parent_uid]).unwrap();
+        let parent = vault.records.get(&parent_uid).expect("parent fixture exists");
+        let found = Attachment::of(&vault, parent).unwrap();
+        let [first, _] = found.as_slice() else {
+            panic!("expected two parent attachments");
+        };
         assert_eq!(found.iter().map(|file| file.name.as_str()).collect::<Vec<_>>(), ["a.txt", "b.bin"]);
-        assert_eq!(found[0].key, key(2));
+        assert_eq!(first.key, key(2));
 
         assert!(Attachment::of(&vault, &malformed_ref).is_err());
         assert_eq!(
-            Attachment::of(&vault, &vault.records[&Uid::from(b"F2".as_slice())])
-                .unwrap()
-                .len(),
+            Attachment::of(
+                &vault,
+                vault
+                    .records
+                    .get(&Uid::from(b"F2".as_slice()))
+                    .expect("file fixture exists")
+            )
+            .unwrap()
+            .len(),
             1
         );
 
@@ -991,7 +1007,11 @@ mod tests {
             json!({"title": "Legacy"}),
             1,
         );
-        assert_eq!(Attachment::of(&Vault::default(), &legacy).unwrap()[0].key, key(9));
+        let legacy_attachments = Attachment::of(&Vault::default(), &legacy).unwrap();
+        let [legacy_attachment] = legacy_attachments.as_slice() else {
+            panic!("expected one legacy attachment");
+        };
+        assert_eq!(legacy_attachment.key, key(9));
         let malformed = record(
             "BAD",
             RecordKind::Legacy {
@@ -1083,6 +1103,9 @@ mod tests {
     #[test]
     fn download_responses_resolve_mixed_grants_and_keep_attachment_ids() {
         let ids = ["ONE", "TWO", "THREE"].map(|bytes| Uid::from(bytes.as_bytes()).to_string());
+        let [first_id, second_id, _third_id] = ids.as_slice() else {
+            panic!("expected three attachment IDs");
+        };
         let attachments = ids.each_ref().map(|id| {
             Attachment {
                 id:    id.as_str().to_owned(),
@@ -1091,15 +1114,18 @@ mod tests {
                 key:   key(0),
             }
         });
+        let [first, second, third] = attachments.as_slice() else {
+            panic!("expected three attachments");
+        };
         let files = DownloadResponse::Files(FilesGetResponse {
             files: vec![
                 crate::proto::records::FileGetStatus {
-                    record_uid: b64_decode(&ids[1]).unwrap(),
+                    record_uid: b64_decode(second_id).unwrap(),
                     status: 91,
                     ..Default::default()
                 },
                 crate::proto::records::FileGetStatus {
-                    record_uid: b64_decode(&ids[0]).unwrap(),
+                    record_uid: b64_decode(first_id).unwrap(),
                     status: FileGetResult::FgSuccess as i32,
                     url: "https://example.invalid/one".into(),
                     file_key_type: RecordKeyType::EncryptedByDataKey as i32,
@@ -1107,8 +1133,8 @@ mod tests {
                 },
             ],
         });
-        assert_eq!(files.ticket(&attachments[0], 0).unwrap().url, "https://example.invalid/one");
-        for attachment in &attachments[1..] {
+        assert_eq!(files.ticket(first, 0).unwrap().url, "https://example.invalid/one");
+        for attachment in [second, third] {
             let message = format!("{:?}", files.ticket(attachment, 1).err().unwrap());
             assert!(message.contains(&attachment.id), "{message}");
         }
@@ -1116,8 +1142,8 @@ mod tests {
         let legacy = DownloadResponse::Legacy(json!({
             "downloads": [{"url": "https://example.invalid/one"}, {"url": ""}]
         }));
-        assert_eq!(legacy.ticket(&attachments[0], 0).unwrap().url, "https://example.invalid/one");
-        for (index, attachment) in attachments.iter().enumerate().skip(1) {
+        assert_eq!(legacy.ticket(first, 0).unwrap().url, "https://example.invalid/one");
+        for (index, attachment) in [(1, second), (2, third)] {
             let message = format!("{:?}", legacy.ticket(attachment, index).err().unwrap());
             assert!(message.contains(&attachment.id), "{message}");
         }
@@ -1192,17 +1218,23 @@ mod tests {
                 key:   key(7),
             },
         ];
+        let [file_one, file_two] = files.as_slice() else {
+            panic!("expected two upload fixtures");
+        };
         let add = add_request(&files, &[5; 32]).unwrap();
+        let [entry_one, entry_two] = add.files.as_slice() else {
+            panic!("expected two add response entries");
+        };
         for (entry, file, expected_metadata, expected_size) in [
             (
-                &add.files[0],
-                &files[0],
+                entry_one,
+                file_one,
                 json!({"title": "notes.txt", "name": "notes.txt", "type": "text/plain", "size": 11}),
                 111i64,
             ),
             (
-                &add.files[1],
-                &files[1],
+                entry_two,
+                file_two,
                 json!({"title": "report.pdf", "name": "report.pdf", "type": "application/pdf", "size": 12}),
                 112i64,
             ),
@@ -1227,14 +1259,34 @@ mod tests {
         parent.revision = 41;
         let update = link_request(&parent, &files, RecordKeyType::EncryptedByPublicKeyEcc).unwrap();
         assert_eq!(update.security_data_key_type, RecordKeyType::EncryptedByPublicKeyEcc as i32);
-        let updated = &update.records[0];
+        let [updated] = update.records.as_slice() else {
+            panic!("expected one record update");
+        };
         assert_eq!(updated.record_uid, Vec::<u8>::from(&parent.uid));
         assert_eq!(updated.revision, 41);
         let plain = crypto::decrypt_aes_v2(&updated.data, &parent.key).unwrap();
         assert!(plain.len() >= 384 && plain.len().is_multiple_of(16));
         let data: Value = serde_json::from_slice(&plain).unwrap();
-        assert_eq!(data["fields"][0], parent.data["fields"][0]);
-        assert_eq!(data["fields"][1]["value"], json!(["OLD", b64_encode(&files[0].uid), b64_encode(&files[1].uid)]));
+        let fields = data
+            .get("fields")
+            .and_then(Value::as_array)
+            .expect("updated fields are an array");
+        let parent_fields = parent
+            .data
+            .get("fields")
+            .and_then(Value::as_array)
+            .expect("parent fields are an array");
+        let [login_field, file_field] = fields.as_slice() else {
+            panic!("expected login and file-reference fields");
+        };
+        let [parent_login_field, _parent_file_field] = parent_fields.as_slice() else {
+            panic!("expected login and file-reference fixture fields");
+        };
+        assert_eq!(login_field, parent_login_field);
+        assert_eq!(
+            file_field.get("value"),
+            Some(&json!(["OLD", b64_encode(&file_one.uid), b64_encode(&file_two.uid)]))
+        );
         assert_eq!(updated.record_links_add.len(), files.len());
         for (link, file) in updated.record_links_add.iter().zip(&files) {
             assert_eq!(link.record_uid, file.uid);
@@ -1242,12 +1294,25 @@ mod tests {
             assert_eq!(linked_key.as_slice(), &*file.key);
         }
         let no_fields = record("P2", RecordKind::Typed, json!({"title": "A"}), 1);
-        let no_fields_update = link_request(&no_fields, &files[1..], RecordKeyType::EncryptedByPublicKey).unwrap();
-        let no_fields_data = crypto::decrypt_aes_v2(&no_fields_update.records[0].data, &no_fields.key).unwrap();
+        let no_fields_update =
+            link_request(&no_fields, std::slice::from_ref(file_two), RecordKeyType::EncryptedByPublicKey).unwrap();
+        let [no_fields_record] = no_fields_update.records.as_slice() else {
+            panic!("expected one empty-record update");
+        };
+        let no_fields_data = crypto::decrypt_aes_v2(&no_fields_record.data, &no_fields.key).unwrap();
         let no_fields_data: Value = serde_json::from_slice(&no_fields_data).unwrap();
-        assert_eq!(no_fields_data["fields"], json!([{"type": "fileRef", "value": [b64_encode(&files[1].uid)]}]));
+        let [file_ref_field] = no_fields_data
+            .get("fields")
+            .and_then(Value::as_array)
+            .expect("new fields are an array")
+            .as_slice()
+        else {
+            panic!("expected one file-reference field");
+        };
+        assert_eq!(file_ref_field.get("type").and_then(Value::as_str), Some("fileRef"));
+        assert_eq!(file_ref_field.get("value"), Some(&json!([b64_encode(&file_two.uid)])));
         let malformed = record("P3", RecordKind::Typed, json!(["not", "an", "object"]), 1);
-        assert!(link_request(&malformed, &files[1..], RecordKeyType::EncryptedByPublicKey).is_err());
+        assert!(link_request(&malformed, std::slice::from_ref(file_two), RecordKeyType::EncryptedByPublicKey).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1281,16 +1346,23 @@ mod tests {
             while total.is_none_or(|total| request.len() < total) {
                 let read = stream.read(&mut chunk).unwrap();
                 assert!(read > 0, "client hung up mid-request");
-                request.extend_from_slice(&chunk[..read]);
+                request.extend_from_slice(chunk.get(..read).expect("read count fits chunk buffer"));
                 if total.is_none()
                     && let Some(head_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
                 {
-                    let head = String::from_utf8_lossy(&request[..head_end]).to_lowercase();
+                    let (head_bytes, frame) = request.split_at_checked(head_end).expect("delimiter is in request");
+                    let _frame = frame.strip_prefix(b"\r\n\r\n").expect("delimiter was found");
+                    let head = String::from_utf8_lossy(head_bytes).to_lowercase();
                     let length = head
                         .lines()
                         .find_map(|line| line.strip_prefix("content-length: "))
                         .map_or(0, |length| length.trim().parse().unwrap());
-                    total = Some(head_end + 4 + length);
+                    total = Some(
+                        head_end
+                            .checked_add(4)
+                            .and_then(|head| head.checked_add(length))
+                            .expect("request length fits usize"),
+                    );
                 }
             }
             write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", reply.len())
@@ -1344,7 +1416,7 @@ mod tests {
         );
         server.worker.join().unwrap();
         let mut forged = crypto::encrypt_aes_v2(&plain, &key).unwrap();
-        forged[100] ^= 1;
+        *forged.get_mut(100).expect("GCM fixture is long enough") ^= 1;
         let server = serve_once("200 OK", forged);
         assert!(
             download(
@@ -1443,8 +1515,13 @@ mod tests {
         };
         send(&http, &target, &file).unwrap();
         let request = server.worker.join().unwrap();
-        let head_end = request.windows(4).position(|window| window == b"\r\n\r\n").unwrap() + 4;
-        let head = String::from_utf8(request[..head_end].to_vec()).unwrap().to_lowercase();
+        let head_end = request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("HTTP header delimiter");
+        let (head_bytes, frame) = request.split_at_checked(head_end).expect("delimiter is in request");
+        let body = frame.strip_prefix(b"\r\n\r\n").expect("delimiter was found");
+        let head = String::from_utf8(head_bytes.to_vec()).unwrap().to_lowercase();
         let header = |name: &str| {
             head.lines()
                 .find_map(|line| line.strip_prefix(&format!("{name}: ")))
@@ -1455,20 +1532,24 @@ mod tests {
             .strip_prefix("multipart/form-data; boundary=")
             .unwrap()
             .to_owned();
-        let body = &request[head_end..];
         assert!(head.starts_with("post /blob http/1.1\r\n"));
         assert_eq!(header("content-length"), body.len().to_string());
 
         let marker = format!("--{boundary}\r\n");
         let closing = format!("\r\n--{boundary}--\r\n");
-        assert!(body.starts_with(marker.as_bytes()));
+        let mut remaining = body.strip_prefix(marker.as_bytes()).expect("form begins with boundary");
         assert!(body.ends_with(closing.as_bytes()));
-        let mut remaining = &body[marker.len()..];
         let mut fields = BTreeMap::new();
         let (file_headers, encrypted) = loop {
-            let header_end = remaining.windows(4).position(|window| window == b"\r\n\r\n").unwrap();
-            let headers = std::str::from_utf8(&remaining[..header_end]).unwrap().to_owned();
-            let payload = &remaining[header_end + 4..];
+            let header_end = remaining
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .expect("multipart header delimiter");
+            let (header_bytes, frame) = remaining.split_at_checked(header_end).expect("delimiter is in part");
+            let headers = std::str::from_utf8(header_bytes).unwrap().to_owned();
+            let payload = frame
+                .strip_prefix(b"\r\n\r\n")
+                .expect("part header delimiter was found");
             if headers.starts_with("Content-Disposition: form-data; name=\"file\";") {
                 let file_ref = b64_encode(&file.uid);
                 assert_eq!(
@@ -1494,10 +1575,10 @@ mod tests {
             let next = payload
                 .windows(separator.len())
                 .position(|window| window == separator.as_bytes())
-                .unwrap();
-            let value = &payload[..next];
+                .expect("multipart field separator");
+            let (value, rest) = payload.split_at_checked(next).expect("separator is in payload");
             assert!(fields.insert(name.to_owned(), value.to_vec()).is_none());
-            remaining = &payload[next + separator.len()..];
+            remaining = rest.strip_prefix(separator.as_bytes()).expect("separator was found");
         };
         assert_eq!(file_headers.lines().count(), 2);
         assert_eq!(fields.len(), 2);

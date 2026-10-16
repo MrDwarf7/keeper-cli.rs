@@ -172,7 +172,11 @@ impl Record {
             .typed_value(&["paymentCard"])
             .and_then(|card| card.get("cardNumber"))
             .and_then(Value::as_str)
-            && let Some(last4) = number.char_indices().rev().nth(3).map(|(i, _)| &number[i..])
+            && let Some(last4) = number
+                .char_indices()
+                .rev()
+                .nth(3)
+                .and_then(|(start, _)| number.get(start..))
         {
             return format!("*{last4}");
         }
@@ -407,7 +411,7 @@ mod tests {
 
     fn record(kind: RecordKind, data: Value) -> Record {
         Record {
-            uid: Uid::from(&[1u8; 16][..]),
+            uid: Uid::from([1u8; 16].as_slice()),
             kind,
             data,
             revision: 0,
@@ -528,7 +532,10 @@ mod tests {
         for secrets in [Secrets::Masked, Secrets::Revealed] {
             let fields = r.display_fields(secrets);
             assert_eq!(fields.iter().map(|field| field.label.as_ref()).collect::<Vec<_>>(), ["Text"]);
-            assert_eq!(fields[0].value.as_ref(), "first, second");
+            let [field] = fields.as_slice() else {
+                panic!("expected one non-empty display field");
+            };
+            assert_eq!(field.value.as_ref(), "first, second");
         }
     }
     #[test]
