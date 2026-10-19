@@ -1,4 +1,5 @@
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::crypto::AesKey;
 use crate::uid::Uid;
@@ -39,12 +40,29 @@ pub enum FolderKind {
     SharedFolderFolder { shared_folder: Uid },
 }
 
+/// Decrypted folder metadata. Unknown Commander properties are retained on serialization.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct FolderData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name:  Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl TryFrom<Value> for FolderData {
+    type Error = crate::Error;
+
+    fn try_from(value: Value) -> crate::Result<Self> {
+        Ok(serde_json::from_value(value)?)
+    }
+}
+
 #[derive(Debug)]
 pub struct Folder {
     pub uid:        Uid,
     pub name:       String,
     /// Decrypted folder metadata such as its name and color.
-    pub data:       Value,
+    pub data:       FolderData,
     pub kind:       FolderKind,
     pub parent:     Location,
     pub subfolders: Vec<Uid>,
@@ -60,5 +78,19 @@ impl Folder {
             FolderKind::SharedFolder => Some(&self.uid),
             FolderKind::SharedFolderFolder { shared_folder } => Some(shared_folder),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::FolderData;
+
+    #[test]
+    fn metadata_preserves_unknown_properties_and_rejects_malformed_name() {
+        let data = FolderData::try_from(json!({"name": "Docs", "color": "blue"})).unwrap();
+        assert_eq!(serde_json::to_value(data).unwrap(), json!({"name": "Docs", "color": "blue"}));
+        assert!(FolderData::try_from(json!({"name": 7})).is_err());
     }
 }

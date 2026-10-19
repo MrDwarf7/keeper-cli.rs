@@ -42,10 +42,11 @@ impl From<Session> for Account {
     }
 }
 
-/// The synced vault together with the current folder, borrowed at once.
+/// The authenticated session, synced vault and current folder borrowed together.
 pub struct View<'a> {
-    pub vault: &'a Vault,
-    pub cwd:   &'a Location,
+    pub session: &'a mut Session,
+    pub vault:   &'a Vault,
+    pub cwd:     &'a Location,
 }
 
 impl App {
@@ -137,10 +138,11 @@ impl App {
 
     pub fn view(&mut self) -> Result<View<'_>> {
         self.ensure_synced()?;
-        let account = self.account.as_ref().ok_or(Error::NotLoggedIn)?;
+        let account = self.account.as_mut().ok_or(Error::NotLoggedIn)?;
         Ok(View {
-            vault: account.vault.as_ref().ok_or(Error::NotLoggedIn)?,
-            cwd:   &account.cwd,
+            session: &mut account.session,
+            vault:   account.vault.as_ref().ok_or(Error::NotLoggedIn)?,
+            cwd:     &account.cwd,
         })
     }
 }

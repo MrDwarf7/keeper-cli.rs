@@ -25,6 +25,7 @@ use serde_json::Value;
 use crate::auth::{self, Session};
 use crate::commands::{App, Run};
 use crate::crypto::AesKey;
+use crate::diagnostics::{Report, Verbosity};
 use crate::prelude::*;
 use crate::proto::account_summary::AccountSummaryElements;
 use crate::proto::records as pb;
@@ -62,7 +63,7 @@ pub struct RecordAdd {
     /// Output format.
     #[arg(long, value_enum, default_value_t)]
     format:      OutputFormat,
-    /// Fields as [f.|c.][type.][label]=value; see --syntax-help.
+    /// Fields as `[f.|c.][type.][label]=value`; see --syntax-help.
     #[arg(value_name = "FIELD=VALUE", allow_hyphen_values = true)]
     fields:      Vec<String>,
 }
@@ -89,7 +90,7 @@ pub struct RecordUpdate {
     /// Record path or UID.
     #[arg(short = 'r', long)]
     record:      Option<String>,
-    /// Fields as [f.|c.][type.][label]=value (empty value deletes); see --syntax-help.
+    /// Fields as `[f.|c.][type.][label]=value` (empty value deletes); see --syntax-help.
     #[arg(value_name = "FIELD=VALUE", allow_hyphen_values = true)]
     fields:      Vec<String>,
 }
@@ -303,29 +304,21 @@ impl Run for Rm {
     }
 }
 
-/// A logged-in session with the vault it last synced and the shell's current folder.
-struct Ctx<'a> {
-    session: &'a mut Session,
-    vault:   &'a Vault,
-    cwd:     &'a Location,
-}
+/// The synced session, vault and working folder borrowed together.
+type Ctx<'a> = crate::commands::View<'a>;
 
 /// Runs a write against the synced vault. Commander re-syncs after every write, so the cached
 /// vault is dropped afterwards and the next command downloads it again.
 fn with_vault<T>(app: &mut App, job: impl FnOnce(&mut Ctx<'_>) -> Result<T>) -> Result<T> {
-    app.ensure_synced()?;
-    let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-    let cwd = account.cwd.clone();
     let outcome = {
-        let session = &mut account.session;
-        let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
+        let view = app.view()?;
         job(&mut Ctx {
-            session,
-            vault,
-            cwd: &cwd,
+            session: &mut *view.session,
+            vault:   view.vault,
+            cwd:     view.cwd,
         })
     };
-    account.vault = None;
+    app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
     outcome
 }
 
@@ -428,16 +421,49 @@ fn update(ctx: &mut Ctx<'_>, edit: &Edit) -> Result<()> {
 /// Errors stop the command; warnings do too unless ignored, in which case the edits that did
 /// apply are saved.
 fn settle(found: Findings, warnings: Warnings) -> Result<()> {
-    if !found.errors.is_empty() {
-        return Err(Error::Generic(found.errors.join("\n")));
+    let into_error = |warning| {
+        match warning {
+            field::FindingWarning::Message(message) => Error::Generic(message),
+            field::FindingWarning::Cause(error) => error,
+        }
+    };
+    let Findings {
+        warnings: found_warnings,
+        errors,
+    } = found;
+    if !errors.is_empty() {
+        let failures = errors
+            .into_iter()
+            .chain(found_warnings.into_iter().map(into_error))
+            .collect();
+        return Err(Error::RecordEditFindings { failures });
     }
-    for warning in &found.warnings {
-        eprintln!("{warning}");
+    if found_warnings.is_empty() {
+        return Ok(());
     }
-    if !found.warnings.is_empty() && warnings == Warnings::Heed {
-        return Err(Error::Generic(
-            "Nothing was saved. Fix the warnings above, or use --force to save the edits that applied.".into(),
-        ));
+    if warnings == Warnings::Heed {
+        let failures = found_warnings
+            .into_iter()
+            .map(into_error)
+            .chain(std::iter::once(Error::Generic(
+                "Nothing was saved. Fix the warnings above, or use --force to save the edits that applied.".into(),
+            )))
+            .collect();
+        return Err(Error::RecordEditFindings { failures });
+    }
+    for warning in &found_warnings {
+        match warning {
+            field::FindingWarning::Message(message) => eprintln!("{message}"),
+            field::FindingWarning::Cause(error) => {
+                eprintln!(
+                    "{}",
+                    Report {
+                        error,
+                        verbosity: Verbosity::Normal,
+                    }
+                )
+            }
+        }
     }
     Ok(())
 }
@@ -661,7 +687,7 @@ fn existing(vault: &Vault, cwd: &Location, spec: &str) -> Result<Existing> {
         uid:      record.uid.clone(),
         key:      record.key.clone(),
         revision: record.revision,
-        body:     serde_json::from_value(record.data.clone())?,
+        body:     Body::from(&record.data),
     })
 }
 
@@ -1039,6 +1065,108 @@ mod tests {
     }
 
     #[test]
+    fn settle_retains_fatal_errors_and_coexisting_warning_causes() {
+        let source = || {
+            Error::Context {
+                context: "invalid field value".into(),
+                source:  Box::new(Error::Generic("parse source".into())),
+            }
+        };
+        let found = Findings {
+            errors:   vec![Error::Generic("first".into()), Error::Generic("second".into())],
+            warnings: vec![
+                field::FindingWarning::Cause(source()),
+                field::FindingWarning::Message("expected warning".into()),
+                field::FindingWarning::Cause(source()),
+            ],
+        };
+        let Err(Error::RecordEditFindings { failures }) = settle(found, Warnings::Heed) else {
+            panic!("expected aggregated fatal and warning errors");
+        };
+        assert_eq!(failures.len(), 5);
+        let [
+            Error::Generic(first_error),
+            Error::Generic(second_error),
+            Error::Context { source: first, .. },
+            Error::Generic(message),
+            Error::Context { source: second, .. },
+        ] = failures.as_slice()
+        else {
+            panic!("expected fatal errors followed by all warning findings");
+        };
+        assert_eq!(first_error, "first");
+        assert_eq!(second_error, "second");
+        assert_eq!(message, "expected warning");
+        assert!(matches!(first.as_ref(), Error::Generic(message) if message == "parse source"));
+        assert!(matches!(second.as_ref(), Error::Generic(message) if message == "parse source"));
+    }
+
+    #[test]
+    fn malformed_field_input_retains_json_source_through_settle() {
+        let specs = [r#"text.secret=$JSON:{"secret":"sensitive""#].map(|spec| spec.parse::<Spec>().unwrap());
+        let mut body = Body::default();
+        let mut found = Findings::default();
+        field::apply(&mut body, &specs, &mut found);
+
+        let Err(Error::RecordEditFindings { failures }) = settle(found, Warnings::Heed) else {
+            panic!("expected malformed input to block saving");
+        };
+        let [Error::Context { source, .. }, Error::Generic(_)] = failures.as_slice() else {
+            panic!("expected source-bearing parse failure and warning guidance");
+        };
+        assert!(matches!(source.as_ref(), Error::Json(_)));
+    }
+    #[test]
+    fn invalid_secret_json_shape_warnings_do_not_echo_values() {
+        const SENTINEL: &str = "super-secret-sentinel";
+        let specs = [
+            format!(r#"password=$JSON:{{"value":"{SENTINEL}"}}"#),
+            format!(r#"keyPair=$JSON:["{SENTINEL}"]"#),
+        ]
+        .iter()
+        .map(|spec| spec.parse::<Spec>().unwrap())
+        .collect::<Vec<_>>();
+        let apply = || {
+            let mut body = Body::default();
+            let mut found = Findings::default();
+            field::apply(&mut body, &specs, &mut found);
+            found
+        };
+
+        let forced = apply();
+        let mut messages = forced.warnings.iter().filter_map(|warning| {
+            match warning {
+                field::FindingWarning::Message(message) => Some(message.as_str()),
+                field::FindingWarning::Cause(_) => None,
+            }
+        });
+        assert!(messages.clone().any(|message| message.contains("password")));
+        assert!(messages.clone().any(|message| message.contains("keyPair")));
+        assert!(messages.all(|message| !message.contains(SENTINEL)));
+        assert!(settle(forced, Warnings::Ignore).is_ok());
+
+        let error = settle(apply(), Warnings::Heed).expect_err("invalid field shapes should block saving");
+        let report = Report {
+            error:     &error,
+            verbosity: Verbosity::Normal,
+        }
+        .to_string();
+        assert!(report.contains("password"));
+        assert!(report.contains("keyPair"));
+        assert!(!report.contains(SENTINEL));
+    }
+    #[test]
+    fn force_keeps_warning_recovery_nonfatal() {
+        let found = Findings {
+            warnings: vec![field::FindingWarning::Cause(Error::Context {
+                context: "invalid field value".into(),
+                source:  Box::new(Error::Generic("parse source".into())),
+            })],
+            ..Findings::default()
+        };
+        assert!(settle(found, Warnings::Ignore).is_ok());
+    }
+    #[test]
     fn add_encrypts_keys_and_padded_record_body() {
         let new = New {
             uid:  Uid::from([1; 16].as_slice()),
@@ -1083,7 +1211,7 @@ mod tests {
             crate::vault::Folder {
                 uid:        folder_uid.clone(),
                 name:       "nested".into(),
-                data:       Value::Null,
+                data:       crate::vault::FolderData::default(),
                 kind:       FolderKind::SharedFolderFolder {
                     shared_folder: shared_uid,
                 },
@@ -1168,7 +1296,7 @@ mod tests {
             crate::vault::Record {
                 uid:                  uid.clone(),
                 kind:                 RecordKind::Typed,
-                data:                 serde_json::json!({ "title": "item" }),
+                data:                 serde_json::from_value(serde_json::json!({ "title": "item" })).unwrap(),
                 revision:             0,
                 shared:               false,
                 client_modified_time: 0,

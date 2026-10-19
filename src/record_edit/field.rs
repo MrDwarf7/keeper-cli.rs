@@ -11,9 +11,9 @@ use data_encoding::BASE64;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-use crate::crypto;
 use crate::generator::{self, Rules};
-use crate::prelude::*;
+use crate::vault::RecordData;
+use crate::{Error, Result, crypto};
 
 // --- catalogue ---------------------------------------------------------------------------------
 
@@ -89,15 +89,17 @@ const TYPE_NAMES: [(&str, FieldType); 32] = [
     ("rbiUrl", FieldType::RbiUrl),
 ];
 
+impl FieldType {
+    fn lookup(name: &str) -> Option<Self> {
+        TYPE_NAMES.iter().find(|(n, _)| *n == name).map(|(_, ty)| *ty)
+    }
+}
+
 impl FromStr for FieldType {
     type Err = Error;
 
     fn from_str(name: &str) -> Result<Self> {
-        TYPE_NAMES
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, t)| *t)
-            .ok_or_else(|| Error::Generic(format!("unknown field type '{name}'")))
+        Self::lookup(name).ok_or_else(|| Error::Generic(format!("unknown field type '{name}'")))
     }
 }
 
@@ -163,10 +165,9 @@ pub struct Def {
     pub multiple: Multiple,
 }
 
-impl FromStr for Def {
-    type Err = Error;
-
-    fn from_str(name: &str) -> Result<Self> {
+impl Def {
+    /// Looks up a catalogue name without treating expected unknown custom types as failures.
+    fn lookup(name: &str) -> Option<Self> {
         use FieldType as T;
         use Multiple::{Always, Never, Optional};
         let (ty, multiple) = match name {
@@ -187,9 +188,17 @@ impl FromStr for Def {
             "pamSettings" => (T::PamSettings, Never),
             "pamRemoteBrowserSettings" => (T::PamRemoteBrowserSettings, Never),
             "rbiUrl" => (T::RbiUrl, Never),
-            other => (other.parse()?, Optional),
+            other => (FieldType::lookup(other)?, Optional),
         };
-        Ok(Self { ty, multiple })
+        Some(Self { ty, multiple })
+    }
+}
+
+impl FromStr for Def {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        Self::lookup(name).ok_or_else(|| Error::Generic(format!("unknown field type '{name}'")))
     }
 }
 
@@ -256,6 +265,51 @@ pub struct Body {
     pub custom:    Vec<Field>,
     #[serde(flatten)]
     pub extra:     Map<String, Value>,
+}
+
+impl From<&RecordData> for Body {
+    fn from(data: &RecordData) -> Self {
+        let field = |source: &crate::vault::RecordField| {
+            let mut extra = source.extra.clone();
+            if let Some(name) = &source.name {
+                extra.insert("name".into(), Value::String(name.clone()));
+            }
+            if let Some(privacy_screen) = source.privacy_screen {
+                extra.insert("privacyScreen".into(), Value::Bool(privacy_screen));
+            }
+            Field {
+                ty: source.ty.clone(),
+                label: source.label.clone().unwrap_or_default(),
+                value: match source.value.as_ref() {
+                    Some(Value::Null) | None => Vec::new(),
+                    Some(Value::Array(values)) => values.clone(),
+                    Some(value) => vec![value.clone()],
+                },
+                required: source.required,
+                extra,
+            }
+        };
+        let mut extra = data.extra.clone();
+        for (key, value) in [
+            ("name", data.name.as_ref().map(|value| Value::String(value.clone()))),
+            ("secret1", data.secret1.as_ref().map(|value| Value::String(value.clone()))),
+            ("secret2", data.secret2.as_ref().map(|value| Value::String(value.clone()))),
+            ("link", data.link.as_ref().map(|value| Value::String(value.clone()))),
+            ("size", data.size.map(Value::from)),
+        ] {
+            if let Some(value) = value {
+                extra.insert(key.into(), value);
+            }
+        }
+        Self {
+            type_name: data.type_name.clone(),
+            title: data.title.clone(),
+            notes: data.notes.clone(),
+            fields: data.fields.iter().map(field).collect(),
+            custom: data.custom.iter().map(field).collect(),
+            extra,
+        }
+    }
 }
 
 /// Records this one points at (attachments, linked cards and addresses, ...); each needs a
@@ -354,10 +408,7 @@ pub fn adjust(body: &mut Body, defs: &[TypeField]) {
     let mut fields = Vec::new();
     let mut rebuild = false;
     for def in defs {
-        let ignore_label = def
-            .reference
-            .parse::<Def>()
-            .is_ok_and(|d| d.multiple == Multiple::Never);
+        let ignore_label = Def::lookup(&def.reference).is_some_and(|d| d.multiple == Multiple::Never);
         let same_type = |f: &Field| f.ty == def.reference;
         let found = old
             .iter()
@@ -491,7 +542,7 @@ impl FromStr for Spec {
         }
         let (ty, label) = match name.split_once('.') {
             Some(split) => split,
-            None if name == "file" || name.parse::<Def>().is_ok() => (name, ""),
+            None if name == "file" || Def::lookup(name).is_some() => (name, ""),
             None => ("", name),
         };
         Ok(Self {
@@ -528,12 +579,18 @@ impl<'a> From<&'a str> for Input<'a> {
     }
 }
 
+#[derive(Debug)]
+pub enum FindingWarning {
+    Message(String),
+    Cause(Error),
+}
+
 /// Problems found while applying edits. Errors always stop the command; warnings only without
 /// `--force`.
 #[derive(Debug, Default)]
 pub struct Findings {
-    pub warnings: Vec<String>,
-    pub errors:   Vec<String>,
+    pub warnings: Vec<FindingWarning>,
+    pub errors:   Vec<Error>,
 }
 
 /// What one edit does to a field's values.
@@ -559,17 +616,18 @@ pub fn apply(body: &mut Body, specs: &[Spec], found: &mut Findings) {
             && spec.ty != "password"
             && GEN_LABELS.contains(&spec.label.to_lowercase().as_str())
         {
-            found.errors.push(format!(
+            found.errors.push(Error::Generic(format!(
                 "Use lowercase field type password='{}' instead of {}=... ($GEN only works on password fields).",
                 spec.value, spec.label
-            ));
+            )));
             continue;
         }
         let ty = if spec.ty.is_empty() { "text" } else { spec.ty.as_str() };
-        if ty.parse::<Def>().is_err() && !spec.value.is_empty() && !spec.value.starts_with("$JSON") {
-            found
-                .warnings
-                .push(format!("Field type \"{ty}\" is not supported. Field: {ty}.{}", spec.label));
+        if Def::lookup(ty).is_none() && !spec.value.is_empty() && !spec.value.starts_with("$JSON") {
+            found.warnings.push(FindingWarning::Message(format!(
+                "Field type \"{ty}\" is not supported. Field: {ty}.{}",
+                spec.label
+            )));
             continue;
         }
         let Some(slot) = locate(body, spec, ty, found) else {
@@ -580,7 +638,7 @@ pub fn apply(body: &mut Body, specs: &[Spec], found: &mut Findings) {
                 Slot::Fields(field) => field.value.clear(),
                 Slot::Custom(_) => {
                     let label = spec.label.to_lowercase();
-                    let ignore_label = ty.parse::<Def>().is_ok_and(|d| d.multiple == Multiple::Never);
+                    let ignore_label = Def::lookup(ty).is_some_and(|d| d.multiple == Multiple::Never);
                     let mut removed = false;
                     body.custom.retain_mut(|field| {
                         if !removed && field_matches(field, spec, &label, ignore_label) {
@@ -602,9 +660,16 @@ pub fn apply(body: &mut Body, specs: &[Spec], found: &mut Findings) {
             Input::Base64(encoded) => decoded(&field.ty, encoded, found),
             Input::Json(rest) => raw_json(&field.ty, rest, found),
             Input::Plain(typed) => {
-                plain(&field.ty, typed)
-                    .inspect_err(|e| found.warnings.push(e.to_string()))
-                    .ok()
+                match plain(&field.ty, typed) {
+                    Ok(assign) => Some(assign),
+                    Err(source) => {
+                        found.warnings.push(FindingWarning::Cause(Error::Context {
+                            context: format!("Field \"{}\"", field.ty),
+                            source:  Box::new(source),
+                        }));
+                        None
+                    }
+                }
             }
         };
         if let Some(assign) = assign {
@@ -622,7 +687,7 @@ fn field_matches(field: &Field, spec: &Spec, label: &str, ignore_label: bool) ->
 fn locate<'a>(body: &'a mut Body, spec: &Spec, ty: &str, found: &mut Findings) -> Option<Slot<'a>> {
     let label = spec.label.to_lowercase();
     // An unknown type has no rules: labels count and there is no single-field shortcut.
-    let def = ty.parse::<Def>().ok();
+    let def = Def::lookup(ty);
     let ignore_label = def.is_some_and(|d| d.multiple == Multiple::Never);
 
     if spec.section == Section::Fields {
@@ -635,36 +700,36 @@ fn locate<'a>(body: &'a mut Body, spec: &Spec, ty: &str, found: &mut Findings) -
             .iter_mut()
             .find(|field| field.ty == ty && (only || field.label.to_lowercase() == label));
         if hit.is_none() {
-            found
-                .warnings
-                .push(format!("Field type \"{ty}\" is not found for record type {}", body.type_name));
+            found.warnings.push(FindingWarning::Message(format!(
+                "Field type \"{ty}\" is not found for record type {}",
+                body.type_name
+            )));
         }
         return hit.map(Slot::Fields);
     }
 
-    if let Some(field) = body
+    if let Some(index) = body
         .fields
-        .iter_mut()
-        .find(|field| field_matches(field, spec, &label, ignore_label))
+        .iter()
+        .position(|field| field_matches(field, spec, &label, ignore_label))
     {
-        return Some(Slot::Fields(field));
+        return body.fields.get_mut(index).map(Slot::Fields);
     }
     // "url=..." without a label hits the record's only url field whatever it is labelled.
     if label.is_empty() && def.is_some_and(|d| d.multiple != Multiple::Always) {
-        let only = {
-            let mut of_type = body.fields.iter().filter(|field| field.ty == ty);
-            of_type.next().is_some() && of_type.next().is_none()
-        };
-        if only {
-            return body.fields.iter_mut().find(|field| field.ty == ty).map(Slot::Fields);
+        let mut of_type = body.fields.iter().enumerate().filter(|(_, field)| field.ty == ty);
+        if let Some((index, _)) = of_type.next()
+            && of_type.next().is_none()
+        {
+            return body.fields.get_mut(index).map(Slot::Fields);
         }
     }
-    if let Some(field) = body
+    if let Some(index) = body
         .custom
-        .iter_mut()
-        .find(|field| field_matches(field, spec, &label, ignore_label))
+        .iter()
+        .position(|field| field_matches(field, spec, &label, ignore_label))
     {
-        return Some(Slot::Custom(field));
+        return body.custom.get_mut(index).map(Slot::Custom);
     }
     if spec.value.is_empty() {
         return None;
@@ -678,7 +743,7 @@ fn locate<'a>(body: &'a mut Body, spec: &Spec, ty: &str, found: &mut Findings) -
 }
 
 fn store(field: &mut Field, assign: Assign) {
-    let template = field.ty.parse::<Def>().map_or(Template::Text, |d| Template::from(d.ty));
+    let template = Def::lookup(&field.ty).map_or(Template::Text, |d| Template::from(d.ty));
     match assign {
         Assign::Replace(mut values) => {
             values.iter_mut().for_each(|v| complete(&template, v));
@@ -722,8 +787,8 @@ fn generated(ty: &str, rest: &str, found: &mut Findings) -> Option<Assign> {
                 .and_then(Recipe::password);
             match password {
                 Ok(password) => Some(Assign::Set(Value::String(password))),
-                Err(e) => {
-                    found.errors.push(e.to_string());
+                Err(error) => {
+                    found.errors.push(error);
                     None
                 }
             }
@@ -733,55 +798,81 @@ fn generated(ty: &str, rest: &str, found: &mut Findings) -> Option<Assign> {
             Some(Assign::Set(Value::String(format!("otpauth://totp/Commander?secret={secret}&issuer=Keeper"))))
         }
         "keyPair" | "privateKey" => {
-            found
-                .warnings
-                .push("Generating key pairs with $GEN is not supported; paste the key instead.".into());
+            found.warnings.push(FindingWarning::Message(
+                "Generating key pairs with $GEN is not supported; paste the key instead.".into(),
+            ));
             None
         }
         other => {
             found
                 .warnings
-                .push(format!("Cannot generate a value for a \"{other}\" field."));
+                .push(FindingWarning::Message(format!("Cannot generate a value for a \"{other}\" field.")));
             None
         }
     }
 }
 
 fn decoded(ty: &str, encoded: &str, found: &mut Findings) -> Option<Assign> {
-    let mut warn = |why: String| {
-        found.warnings.push(why);
-        None
-    };
     if encoded.is_empty() {
-        return warn("Base64 value cannot be empty. Format: $BASE64:<base64_string>".into());
+        found
+            .warnings
+            .push(FindingWarning::Message("Base64 value cannot be empty. Format: $BASE64:<base64_string>".into()));
+        return None;
     }
     let text = match BASE64.decode(encoded.as_bytes()).map(String::from_utf8) {
-        Ok(Ok(text)) if text.is_empty() => return warn("Base64 decoded to empty value".into()),
+        Ok(Ok(text)) if text.is_empty() => {
+            found
+                .warnings
+                .push(FindingWarning::Message("Base64 decoded to empty value".into()));
+            return None;
+        }
         Ok(Ok(text)) => text,
-        Ok(Err(e)) => return warn(format!("Invalid base64 value: {e}")),
-        Err(e) => return warn(format!("Invalid base64 value: {e}")),
+        Ok(Err(source)) => {
+            found.warnings.push(FindingWarning::Cause(Error::Context {
+                context: "Invalid base64 value".into(),
+                source:  Box::new(source.into()),
+            }));
+            return None;
+        }
+        Err(source) => {
+            found.warnings.push(FindingWarning::Cause(Error::Context {
+                context: "Invalid base64 value".into(),
+                source:  Box::new(source.into()),
+            }));
+            return None;
+        }
     };
-    match ty.parse::<Def>().map(|d| Template::from(d.ty)) {
-        Ok(Template::Text) | Err(_) => Some(Assign::Set(Value::String(text))),
-        Ok(_) => warn(format!("$BASE64 only fits text fields, not \"{ty}\".")),
+    match Def::lookup(ty).map(|d| Template::from(d.ty)) {
+        Some(Template::Text) | None => Some(Assign::Set(Value::String(text))),
+        Some(_) => {
+            found
+                .warnings
+                .push(FindingWarning::Message(format!("$BASE64 only fits text fields, not \"{ty}\".")));
+            None
+        }
     }
 }
 
 fn raw_json(ty: &str, rest: &str, found: &mut Findings) -> Option<Assign> {
     let Some(json) = rest.strip_prefix(':') else {
-        found.warnings.push("Format: $JSON:<json_object>".into());
+        found
+            .warnings
+            .push(FindingWarning::Message("Format: $JSON:<json_object>".into()));
         return None;
     };
     if json.is_empty() {
         found
             .warnings
-            .push("JSON value cannot be empty. Format: $JSON:<json_object>".into());
+            .push(FindingWarning::Message("JSON value cannot be empty. Format: $JSON:<json_object>".into()));
         return None;
     }
     match serde_json::from_str::<Value>(json) {
         Ok(value) => checked(ty, value, found),
-        Err(e) => {
-            found.warnings.push(format!("Invalid JSON value: {e}"));
+        Err(source) => {
+            found.warnings.push(FindingWarning::Cause(Error::Context {
+                context: "Invalid JSON value".into(),
+                source:  Box::new(source.into()),
+            }));
             None
         }
     }
@@ -790,7 +881,7 @@ fn raw_json(ty: &str, rest: &str, found: &mut Findings) -> Option<Assign> {
 /// Commander's `validate_json_value`: raw JSON must fit the field's shape, and objects are
 /// completed with the shape's keys before they overwrite what the field holds.
 fn checked(ty: &str, value: Value, found: &mut Findings) -> Option<Assign> {
-    let Ok(def) = ty.parse::<Def>() else {
+    let Some(def) = Def::lookup(ty) else {
         return Some(Assign::Set(value));
     };
     match (Template::from(def.ty), value) {
@@ -803,7 +894,7 @@ fn checked(ty: &str, value: Value, found: &mut Findings) -> Option<Assign> {
                     if def.multiple != Multiple::Always {
                         found
                             .warnings
-                            .push(format!("Field \"{ty}\" does not support multiple values"));
+                            .push(FindingWarning::Message(format!("Field \"{ty}\" does not support multiple values")));
                     }
                     items
                 }
@@ -813,17 +904,20 @@ fn checked(ty: &str, value: Value, found: &mut Findings) -> Option<Assign> {
             for item in items {
                 let mut map = match item {
                     Value::Object(map) => map,
-                    other => {
-                        found.warnings.push(format!("Field \"{ty}\": Incorrect value: {other}"));
+                    _ => {
+                        found.warnings.push(FindingWarning::Message(format!(
+                            "Field \"{ty}\": expected JSON objects in an object array"
+                        )));
                         return None;
                     }
                 };
                 let mut unknown: Vec<&str> = map.keys().map(String::as_str).filter(|k| !keys.contains(k)).collect();
                 unknown.sort_unstable();
                 if !unknown.is_empty() {
-                    found
-                        .warnings
-                        .push(format!("Field \"{ty}\": Properties \"{}\" are not supported.", unknown.join(", ")));
+                    found.warnings.push(FindingWarning::Message(format!(
+                        "Field \"{ty}\": Properties \"{}\" are not supported.",
+                        unknown.join(", ")
+                    )));
                 }
                 for key in keys {
                     map.entry(*key).or_insert_with(|| Value::String(String::new()));
@@ -836,8 +930,28 @@ fn checked(ty: &str, value: Value, found: &mut Findings) -> Option<Assign> {
                 _ => Some(Assign::Replace(objects)),
             }
         }
-        (_, value) => {
-            found.warnings.push(format!("Field \"{ty}\": Incorrect value: {value}"));
+        (Template::Text, _) => {
+            found
+                .warnings
+                .push(FindingWarning::Message(format!("Field \"{ty}\": expected a JSON string")));
+            None
+        }
+        (Template::Number, _) => {
+            found
+                .warnings
+                .push(FindingWarning::Message(format!("Field \"{ty}\": expected a JSON number or boolean")));
+            None
+        }
+        (Template::Flag, _) => {
+            found
+                .warnings
+                .push(FindingWarning::Message(format!("Field \"{ty}\": expected a JSON boolean")));
+            None
+        }
+        (Template::Object(_), _) => {
+            found
+                .warnings
+                .push(FindingWarning::Message(format!("Field \"{ty}\": expected a JSON object or array of objects")));
             None
         }
     }
@@ -846,9 +960,7 @@ fn checked(ty: &str, value: Value, found: &mut Findings) -> Option<Assign> {
 /// Parses the compact notation Commander documents for each field type.
 fn plain(ty: &str, typed: &str) -> Result<Assign> {
     use FieldType as T;
-    let def: Def = ty
-        .parse()
-        .map_err(|_| Error::Generic(format!("Unsupported field type: {ty}")))?;
+    let def: Def = ty.parse()?;
     Ok(match def.ty {
         T::Text
         | T::Url
@@ -1080,9 +1192,7 @@ impl FromStr for Card {
             }
         }
         if card.card_number.is_empty() && card.card_expiration_date.is_empty() && card.card_security_code.is_empty() {
-            return Err(Error::Generic(format!(
-                "Incorrect payment card value \"{typed}\": expected \"<number> <MM/YYYY> <code>\""
-            )));
+            return Err(Error::Generic("Incorrect payment card value: expected \"<number> <MM/YYYY> <code>\"".into()));
         }
         Ok(card)
     }
@@ -1118,9 +1228,9 @@ impl FromStr for Account {
             }
         }
         if account.routing_number.is_empty() && account.account_number.is_empty() {
-            return Err(Error::Generic(format!(
-                "Incorrect bank account value \"{typed}\": expected \"<type> <routing number> <account number>\""
-            )));
+            return Err(Error::Generic(
+                "Incorrect bank account value: expected \"<type> <routing number> <account number>\"".into(),
+            ));
         }
         Ok(account)
     }
@@ -1156,7 +1266,7 @@ impl FromStr for Checked {
         match typed.to_lowercase().as_str() {
             "1" | "y" | "yes" | "t" | "true" => Ok(Self(true)),
             "0" | "n" | "no" | "f" | "false" => Ok(Self(false)),
-            _ => Err(Error::Generic(format!("Incorrect boolean value \"{typed}\": [t]rue or [f]alse"))),
+            _ => Err(Error::Generic("Incorrect boolean value: expected [t]rue or [f]alse".into())),
         }
     }
 }
@@ -1171,13 +1281,14 @@ impl FromStr for Millis {
     type Err = Error;
 
     fn from_str(typed: &str) -> Result<Self> {
-        let bad = || {
-            Error::Generic(format!(
-                "Incorrect date value \"{typed}\": use epoch time, YYYY-MM-DD or YYYY-MM-DDThh:mm:ssZ"
-            ))
-        };
+        let bad = || Error::Generic("Incorrect date value: use epoch time, YYYY-MM-DD or YYYY-MM-DDThh:mm:ssZ".into());
         if is_digits(typed) {
-            let n: i64 = typed.parse().map_err(|_| bad())?;
+            let n = typed.parse::<i64>().map_err(|source| {
+                Error::Context {
+                    context: "Incorrect date value: invalid epoch time".into(),
+                    source:  Box::new(source.into()),
+                }
+            })?;
             // Commander's docs show epoch seconds, but stored dates are milliseconds; no
             // plausible millisecond value is below 10^11 (1973).
             return Ok(Self(if n < 100_000_000_000 { n.saturating_mul(1000) } else { n }));
@@ -1186,12 +1297,26 @@ impl FromStr for Millis {
             Some((date, clock)) => (date, clock.strip_suffix('Z').ok_or_else(bad)?),
             None => (typed, "12:00:00"),
         };
-        let numbers = |s: &str, sep: char| -> Option<Vec<i64>> { s.split(sep).map(|p| p.parse().ok()).collect() };
-        let (Some(&[year, month, day]), Some(&[hour, minute, second])) =
-            (numbers(date, '-').as_deref(), numbers(clock, ':').as_deref())
-        else {
-            return Err(bad());
+        let numbers = |s: &str, sep: char| -> Result<[i64; 3]> {
+            let mut parts = s.split(sep);
+            let [Some(first), Some(second), Some(third)] = [parts.next(), parts.next(), parts.next()] else {
+                return Err(bad());
+            };
+            if parts.next().is_some() {
+                return Err(bad());
+            }
+            let parse = |part: &str| {
+                part.parse::<i64>().map_err(|source| {
+                    Error::Context {
+                        context: "Incorrect date value: invalid numeric component".into(),
+                        source:  Box::new(source.into()),
+                    }
+                })
+            };
+            Ok([parse(first)?, parse(second)?, parse(third)?])
         };
+        let [year, month, day] = numbers(date, '-')?;
+        let [hour, minute, second] = numbers(clock, ':')?;
         let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
         let month_days = match month {
             2 if leap => 29,
@@ -1259,7 +1384,7 @@ impl FromStr for Recipe {
                 }
             }
         };
-        let length = params.iter().find(|p| is_digits(p)).and_then(|p| p.parse().ok());
+        let length: Option<usize> = params.iter().find(|p| is_digits(p)).map(|p| p.parse()).transpose()?;
         Ok(Self { algorithm, length })
     }
 }
@@ -1375,6 +1500,84 @@ mod tests {
     }
 
     #[test]
+    fn single_typed_field_fallback_precedes_custom_field_match() {
+        let mut body = Body {
+            fields: vec![Field {
+                ty: "text".into(),
+                label: "Main".into(),
+                ..Field::default()
+            }],
+            custom: vec![Field {
+                ty: "text".into(),
+                value: vec![json!("custom")],
+                ..Field::default()
+            }],
+            ..Body::default()
+        };
+        let found = edit(&mut body, &["text=typed"]);
+        assert!(found.errors.is_empty() && found.warnings.is_empty());
+        let [field] = body.fields.as_slice() else {
+            panic!("expected one typed field");
+        };
+        let [custom] = body.custom.as_slice() else {
+            panic!("expected one custom field");
+        };
+        assert_eq!(only_value(field), &json!("typed"));
+        assert_eq!(only_value(custom), &json!("custom"));
+    }
+
+    #[test]
+    fn exact_field_then_repeated_custom_match_precedes_no_single_fallback() {
+        let mut body = Body {
+            fields: vec![
+                Field {
+                    ty: "text".into(),
+                    label: "First".into(),
+                    ..Field::default()
+                },
+                Field {
+                    ty: "text".into(),
+                    label: "Second".into(),
+                    ..Field::default()
+                },
+            ],
+            custom: vec![Field {
+                ty: "text".into(),
+                label: "Custom".into(),
+                value: vec![json!("custom")],
+                ..Field::default()
+            }],
+            ..Body::default()
+        };
+
+        let found = edit(&mut body, &["text.first=exact", "text.Custom=custom-match"]);
+        assert!(found.errors.is_empty() && found.warnings.is_empty());
+        let [first, second] = body.fields.as_slice() else {
+            panic!("expected two typed fields");
+        };
+        assert_eq!(only_value(first), &json!("exact"));
+        assert!(second.value.is_empty());
+        let [custom] = body.custom.as_slice() else {
+            panic!("expected one custom field");
+        };
+        assert_eq!(only_value(custom), &json!("custom-match"));
+    }
+
+    #[test]
+    fn unknown_type_is_expected_absence_and_accepts_custom_json() {
+        assert!(Def::lookup("futureField").is_none());
+        assert!("futureField".parse::<Def>().is_err());
+
+        let mut body = Body::default();
+        let found = edit(&mut body, &[r#"futureField.data=$JSON:{"ok":true}"#]);
+        assert!(found.warnings.is_empty());
+        let [custom] = body.custom.as_slice() else {
+            panic!("expected one custom field");
+        };
+        assert_eq!(only_value(custom), &json!({"ok": true}));
+    }
+
+    #[test]
     fn compound_json_fields_are_completed_and_merge_null_deletes_keys() {
         let mut body = login_body();
         let found = edit(&mut body, &[r#"phone.Cell=$JSON:{"number":"555","type":"Mobile"}"#]);
@@ -1464,5 +1667,45 @@ mod tests {
         assert_eq!("1668639533".parse::<Millis>().unwrap().0, 1_668_639_533_000);
         assert_eq!("1668639533000".parse::<Millis>().unwrap().0, 1_668_639_533_000);
         assert!("2023-02-29".parse::<Millis>().is_err());
+    }
+
+    #[test]
+    fn parsed_dates_require_fixed_calendar_and_clock_components() {
+        assert!("2022-11-16T12:34:56Z".parse::<Millis>().is_ok());
+        for invalid in [
+            "2022-11",
+            "2022-11-16-17",
+            "2022-11-16T12:00Z",
+            "2022-11-16T12:00:00:01Z",
+            "sentinel-secret-value",
+        ] {
+            assert!(invalid.parse::<Millis>().is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_privacy_sensitive_field_values_are_not_echoed() {
+        fn parse_error<T>(result: Result<T>) -> Error {
+            match result {
+                Err(error) => error,
+                Ok(_) => panic!("expected invalid field value"),
+            }
+        }
+
+        let secret = "sentinel-secret-value";
+        let card_secret = "secretxx";
+        let card_error = parse_error(card_secret.parse::<Card>());
+        assert!(!card_error.to_string().contains(card_secret));
+        for error in [
+            parse_error(secret.parse::<Checked>()),
+            parse_error(secret.parse::<Millis>()),
+            parse_error(secret.parse::<Account>()),
+        ] {
+            assert!(!error.to_string().contains(secret));
+        }
+
+        let overflow = parse_error("999999999999999999999999".parse::<Millis>());
+        assert!(matches!(overflow, Error::Context { .. }));
+        assert!(std::error::Error::source(&overflow).is_some());
     }
 }

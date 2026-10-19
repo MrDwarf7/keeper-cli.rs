@@ -30,9 +30,23 @@ pub use crate::error::{Error, Result};
 fn main() -> ExitCode {
     let cli = Cli::parse_from(normalize_args(std::env::args_os()));
     let verbosity = Verbosity::from(cli.debug || cfg!(debug_assertions));
+    if let Err(error) = diagnostics::init(verbosity) {
+        eprintln!(
+            "{}",
+            Report {
+                error: &error,
+                verbosity
+            }
+        );
+        return ExitCode::FAILURE;
+    }
     match run(cli, verbosity) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            tracing::debug!(event = "cli_run_succeeded", "CLI run succeeded");
+            ExitCode::SUCCESS
+        }
         Err(error) => {
+            tracing::debug!(error_kind = diagnostics::error_kind(&error), event = "cli_run_failed", "CLI run failed");
             if !matches!(error, Error::Cancelled) || verbosity == Verbosity::Debug {
                 eprintln!(
                     "{}",

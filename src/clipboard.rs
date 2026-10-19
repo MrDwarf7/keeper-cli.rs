@@ -349,7 +349,7 @@ mod tests {
         Record {
             uid: crate::uid::Uid::from(uid.as_bytes()),
             kind,
-            data,
+            data: serde_json::from_value(data).unwrap(),
             revision: 0,
             shared: false,
             client_modified_time: 0,
@@ -392,7 +392,9 @@ mod tests {
         record(
             "OLD",
             RecordKind::Legacy {
-                extra: Some(json!({"fields": [{"field_type": "totp", "data": TOTP_URL}]})),
+                extra: Some(
+                    serde_json::from_value(json!({"fields": [{"field_type": "totp", "data": TOTP_URL}]})).unwrap(),
+                ),
             },
             json!({"title": "Legacy", "secret1": "admin", "secret2": "pw", "notes": "old notes", "custom": [{"name": "PIN", "value": "1234"}]}),
         )
@@ -456,11 +458,7 @@ mod tests {
 
     fn login_record(uid: &str, title: &str, login: &str, notes: &str) -> Record {
         let mut record = typed(uid, title, json!([{"type": "login", "value": [login]}]));
-        record
-            .data
-            .as_object_mut()
-            .expect("record fixture data is an object")
-            .insert("notes".into(), json!(notes));
+        record.data.notes = notes.to_owned();
         record
     }
 

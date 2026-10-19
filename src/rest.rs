@@ -128,16 +128,61 @@ pub struct RestContext {
     pub host:         Host,
     transmission_key: Vec<u8>,
     server_key_id:    i32,
+    #[cfg(test)]
+    test_endpoint:    Option<String>,
     http:             reqwest::blocking::Client,
 }
 
 impl RestContext {
     pub fn new(server: &str) -> Result<Self> {
         Ok(Self {
-            host:             server.parse()?,
-            transmission_key: crypto::random_bytes(32),
-            server_key_id:    DEFAULT_SERVER_KEY_ID,
-            http:             reqwest::blocking::Client::builder()
+            host:                       server.parse()?,
+            transmission_key:           crypto::random_bytes(32),
+            server_key_id:              DEFAULT_SERVER_KEY_ID,
+            #[cfg(test)]
+            test_endpoint:              None,
+            http:                       reqwest::blocking::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .timeout(std::time::Duration::from_secs(300))
+                .build()?,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(endpoint: reqwest::Url, transmission_key: [u8; 32]) -> Result<Self> {
+        let host = endpoint.host_str().unwrap_or_default();
+        let loopback = if host.eq_ignore_ascii_case("localhost") {
+            true
+        } else {
+            match host.parse::<std::net::IpAddr>() {
+                Ok(address) => address.is_loopback(),
+                Err(source) => {
+                    return Err(Error::Context {
+                        context: "test REST endpoint host must be a literal loopback IP".into(),
+                        source:  Box::new(Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, source))),
+                    });
+                }
+            }
+        };
+        if endpoint.scheme() != "http"
+            || !loopback
+            || endpoint.port().is_none()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || !matches!(endpoint.path(), "" | "/")
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err(Error::Generic("test REST endpoint must be an explicit loopback HTTP origin".into()));
+        }
+        Ok(Self {
+            host:                       "US".parse()?,
+            transmission_key:           transmission_key.into(),
+            server_key_id:              DEFAULT_SERVER_KEY_ID,
+            #[cfg(test)]
+            test_endpoint:              Some(endpoint.origin().ascii_serialization()),
+            http:                       reqwest::blocking::Client::builder()
+                .no_proxy()
                 .connect_timeout(std::time::Duration::from_secs(15))
                 .timeout(std::time::Duration::from_secs(300))
                 .build()?,
@@ -183,6 +228,15 @@ impl RestContext {
 
     /// Sends an already framed payload for the legacy JSON command endpoint.
     pub(crate) fn execute_payload(&mut self, endpoint: &str, payload: &ApiRequestPayload) -> Result<Vec<u8>> {
+        #[cfg(test)]
+        let url = if let Some(base) = self.test_endpoint.as_ref() {
+            format!("{base}/api/rest/{endpoint}")
+        } else if endpoint.starts_with("https://") {
+            endpoint.to_owned()
+        } else {
+            format!("https://{}/api/rest/{endpoint}", self.host)
+        };
+        #[cfg(not(test))]
         let url = if endpoint.starts_with("https://") {
             endpoint.to_owned()
         } else {
@@ -209,7 +263,14 @@ impl RestContext {
             let is_json = response
                 .headers()
                 .get("Content-Type")
-                .and_then(|value| value.to_str().ok())
+                .map(|value| value.to_str())
+                .transpose()
+                .map_err(|source| {
+                    Error::Context {
+                        context: "reading REST response Content-Type".into(),
+                        source:  Box::new(Error::HeaderValue(source)),
+                    }
+                })?
                 .is_some_and(|value| value.starts_with("application/json"));
             let body = response.bytes()?;
 
@@ -298,6 +359,53 @@ mod tests {
         for key in EC_SERVER_KEYS {
             p256::PublicKey::from_sec1_bytes(&b64_decode(key).unwrap()).unwrap();
         }
+    }
+
+    #[test]
+    fn malformed_response_content_type_preserves_header_error_source() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 4096];
+            let mut total = None;
+            while total.is_none_or(|total| request.len() < total) {
+                let read = stream.read(&mut chunk).unwrap();
+                assert!(read > 0, "REST client closed before sending its request");
+                request.extend_from_slice(chunk.get(..read).expect("read count fits chunk"));
+                if total.is_none()
+                    && let Some(head_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                {
+                    let (headers, _) = request.split_at_checked(head_end).expect("header delimiter was found");
+                    let headers = String::from_utf8_lossy(headers).to_lowercase();
+                    let body_length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .map_or(0, |length| length.trim().parse().unwrap());
+                    total = Some(
+                        head_end
+                            .checked_add(4)
+                            .and_then(|header| header.checked_add(body_length))
+                            .expect("REST request length fits usize"),
+                    );
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: \xff\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+        let mut rest = RestContext::for_test(reqwest::Url::parse(&endpoint).unwrap(), [7; 32]).unwrap();
+        let error = rest
+            .execute("vault/files_download", &[1], &crate::proto::records::FilesGetRequest::default())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::Error::Context { source, .. } if matches!(*source, crate::Error::HeaderValue(_))
+        ));
+        worker.join().unwrap();
     }
 
     #[test]

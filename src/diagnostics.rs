@@ -1,4 +1,37 @@
+use std::io::IsTerminal;
+
+use tracing_subscriber::filter::{LevelFilter, filter_fn};
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, fmt};
+
 use crate::error::{ApiFailure, Error};
+
+pub fn init(verbosity: Verbosity) -> crate::Result<()> {
+    let default_level = match verbosity {
+        Verbosity::Normal => LevelFilter::INFO,
+        Verbosity::Debug => LevelFilter::DEBUG,
+    };
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(default_level.into())
+        .with_env_var("RUST_LOG")
+        .from_env()?;
+    let ansi = std::io::stderr().is_terminal();
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(
+            fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_ansi(ansi)
+                .with_filter(filter_fn(|metadata| is_project_target(metadata.target()))),
+        )
+        .try_init()?;
+    Ok(())
+}
+
+fn is_project_target(target: &str) -> bool {
+    target == env!("CARGO_CRATE_NAME") || target.starts_with(concat!(env!("CARGO_CRATE_NAME"), "::"))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verbosity {
@@ -30,7 +63,9 @@ fn write_error(f: &mut std::fmt::Formatter<'_>, error: &Error, depth: usize, ver
             writeln!(f, "{context}")?;
             write_error(f, source, depth + 1, verbosity)
         }
-        Error::DownloadBatch { failures } => {
+        Error::DownloadBatch { failures }
+        | Error::AttachmentBatch { failures }
+        | Error::RecordEditFindings { failures } => {
             write_indent(f, depth)?;
             writeln!(f, "{error}")?;
             for (index, failure) in failures.iter().enumerate() {
@@ -39,6 +74,10 @@ fn write_error(f: &mut std::fmt::Formatter<'_>, error: &Error, depth: usize, ver
                 write_error(f, failure, depth + 2, verbosity)?;
             }
             Ok(())
+        }
+        Error::Json(error) => {
+            write_indent(f, depth)?;
+            writeln!(f, "JSON error: {}", safe_json_error(error))
         }
         Error::Api(failure) => write_api_failure(f, failure, depth, verbosity),
         Error::Http(error) => {
@@ -72,6 +111,8 @@ fn write_sources(f: &mut std::fmt::Formatter<'_>, error: &dyn std::error::Error,
         write!(f, "caused by: ")?;
         if let Some(http) = cause.downcast_ref::<reqwest::Error>() {
             write!(f, "{}", safe_http_error(http))?;
+        } else if let Some(json) = cause.downcast_ref::<serde_json::Error>() {
+            write!(f, "{}", safe_json_error(json))?;
         } else {
             write!(f, "{cause}")?;
         }
@@ -81,10 +122,14 @@ fn write_sources(f: &mut std::fmt::Formatter<'_>, error: &dyn std::error::Error,
     Ok(())
 }
 
-fn error_kind(error: &Error) -> &'static str {
+pub(crate) fn error_kind(error: &Error) -> &'static str {
     match error {
         Error::Context { .. } => "context",
         Error::DownloadBatch { .. } => "download batch",
+        Error::AttachmentBatch { .. } => "attachment transfer batch",
+        Error::WorkerPanic(_) => "attachment transfer worker panic",
+        Error::TransferBudgetPoisoned { .. } => "attachment transfer synchronization error",
+        Error::RecordEditFindings { .. } => "record edit findings",
         Error::Generic(_) => "generic error",
         Error::Api(_) => "API error",
         Error::Crypto(_) => "cryptographic error",
@@ -97,11 +142,14 @@ fn error_kind(error: &Error) -> &'static str {
         Error::ParseInt(_) => "integer parsing error",
         Error::Base64(_) => "base64 decoding error",
         Error::Allocation(_) => "allocation error",
+        Error::HeaderValue(_) => "HTTP header error",
         Error::Json(_) => "JSON error",
         Error::Http(_) => "HTTP error",
         Error::Decode(_) => "decode error",
         Error::UnknownEnum(_) => "protocol enum error",
         Error::Config(_) => "configuration error",
+        Error::TracingFilter(_) => "tracing filter error",
+        Error::Tracing(_) => "diagnostics initialization error",
     }
 }
 
@@ -133,6 +181,16 @@ fn safe_http_error(error: &reqwest::Error) -> String {
     }
 }
 
+fn safe_json_error(error: &serde_json::Error) -> String {
+    let category = match error.classify() {
+        serde_json::error::Category::Io => "I/O",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "data",
+        serde_json::error::Category::Eof => "unexpected end",
+    };
+    format!("JSON {category} error at line {} column {}", error.line(), error.column())
+}
+
 fn sanitize_url_in_message(message: &str, url: &reqwest::Url) -> String {
     message.replace(url.as_str(), &safe_url(url))
 }
@@ -149,6 +207,15 @@ fn safe_url(url: &reqwest::Url) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_target_boundary_excludes_dependencies_and_lookalikes() {
+        assert!(is_project_target(env!("CARGO_CRATE_NAME")));
+        assert!(is_project_target(concat!(env!("CARGO_CRATE_NAME"), "::diagnostics")));
+        assert!(!is_project_target("reqwest"));
+        assert!(!is_project_target("hyper"));
+        assert!(!is_project_target(concat!(env!("CARGO_CRATE_NAME"), "_evil")));
+    }
 
     #[test]
     fn nested_batch_and_http_secrets_are_visible_or_redacted() {
@@ -218,6 +285,45 @@ mod tests {
             assert!(!output.contains("password"));
             assert!(!output.contains("query-secret"));
             assert!(!output.contains("fragment-secret"));
+        }
+    }
+
+    #[test]
+    fn json_payload_error_keeps_source_but_redacts_payload_from_reports() {
+        let source =
+            serde_json::from_str::<crate::vault::RecordField>(r#"{"type":"text","privacyScreen":"sentinel-secret"}"#)
+                .expect_err("privacyScreen has the wrong JSON type");
+        assert!(source.to_string().contains("sentinel-secret"));
+        let error = Error::Context {
+            context: "decoding record UID R1".into(),
+            source:  Box::new(Error::Json(source)),
+        };
+        for verbosity in [Verbosity::Normal, Verbosity::Debug] {
+            let output = Report {
+                error: &error,
+                verbosity,
+            }
+            .to_string();
+            assert!(output.contains("decoding record UID R1"));
+            assert!(output.contains("JSON data error"));
+            assert!(!output.contains("sentinel-secret"));
+        }
+    }
+    #[test]
+    fn worker_panic_payload_is_inspectable_but_not_reported() {
+        let marker = "private-panic-payload";
+        let payload: Box<dyn std::any::Any + Send> = Box::new(marker.to_owned());
+        let worker_panic = crate::error::WorkerPanic::from(payload);
+        assert_eq!(worker_panic.as_ref().downcast_ref::<String>().map(String::as_str), Some(marker));
+        let error = Error::WorkerPanic(worker_panic);
+        for verbosity in [Verbosity::Normal, Verbosity::Debug] {
+            let output = Report {
+                error: &error,
+                verbosity,
+            }
+            .to_string();
+            assert!(output.contains("worker panicked"));
+            assert!(!output.contains(marker));
         }
     }
 }

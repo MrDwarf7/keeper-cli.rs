@@ -1,9 +1,10 @@
 //! Download and upload files attached to Keeper records.
 //!
 //! Typed records point to v4 file records through `fileRef`; legacy records keep files in
-//! `extra.files`. File contents use signed URLs and are authenticated before a download is written.
+//! `extra.files`. GCM tags and legacy CBC padding are checked before output files are created; CBC
+//! has no MAC in its legacy framing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::convert::Infallible;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
@@ -38,7 +39,145 @@ use crate::proto::records::{
     RecordsModifyResponse,
     RecordsUpdateRequest,
 };
-use crate::vault::{Location, Record, RecordKind, Vault};
+use crate::vault::{LegacyFile, Location, Record, RecordField, RecordKind, TypedRecord, Vault};
+const TRANSFER_WORKERS: usize = 4;
+const TRANSFER_BUFFER_BUDGET: usize = 64 * 1024 * 1024;
+
+struct TransferBudget {
+    state: std::sync::Mutex<crate::error::TransferAdmissionState>,
+    ready: std::sync::Condvar,
+}
+
+#[derive(Clone, Copy)]
+enum BufferDemand {
+    Known(usize),
+    Unknown,
+}
+
+#[derive(Clone, Copy)]
+enum PermitKind {
+    Shared(usize),
+    Exclusive,
+}
+
+impl TransferBudget {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(crate::error::TransferAdmissionState::Shared(0)),
+            ready: std::sync::Condvar::new(),
+        }
+    }
+
+    fn owned_poison(
+        &self,
+        error: std::sync::PoisonError<std::sync::MutexGuard<'_, crate::error::TransferAdmissionState>>,
+    ) -> Error {
+        let snapshot = **error.get_ref();
+        drop(error.into_inner());
+        self.ready.notify_all();
+        Error::TransferBudgetPoisoned {
+            source: std::sync::PoisonError::new(snapshot),
+        }
+    }
+
+    fn acquire(&self, demand: BufferDemand) -> Result<BufferPermit<'_>> {
+        let mut state = self.state.lock().map_err(|error| self.owned_poison(error))?;
+        loop {
+            match (demand, *state) {
+                (BufferDemand::Known(bytes), crate::error::TransferAdmissionState::Shared(used))
+                    if bytes <= TRANSFER_BUFFER_BUDGET && used.saturating_add(bytes) <= TRANSFER_BUFFER_BUDGET =>
+                {
+                    *state = crate::error::TransferAdmissionState::Shared(used + bytes);
+                    return Ok(BufferPermit {
+                        budget: self,
+                        kind:   PermitKind::Shared(bytes),
+                    });
+                }
+                (BufferDemand::Unknown | BufferDemand::Known(_), crate::error::TransferAdmissionState::Shared(0)) => {
+                    *state = crate::error::TransferAdmissionState::Exclusive;
+                    return Ok(BufferPermit {
+                        budget: self,
+                        kind:   PermitKind::Exclusive,
+                    });
+                }
+                _ => {
+                    state = self.ready.wait(state).map_err(|error| self.owned_poison(error))?;
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> Result<()> {
+        self.state
+            .into_inner()
+            .map(|_| ())
+            .map_err(|source| Error::TransferBudgetPoisoned { source })
+    }
+}
+
+struct BufferPermit<'a> {
+    budget: &'a TransferBudget,
+    kind:   PermitKind,
+}
+
+impl Drop for BufferPermit<'_> {
+    fn drop(&mut self) {
+        let mut state = match self.budget.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match (self.kind, *state) {
+            (PermitKind::Shared(bytes), crate::error::TransferAdmissionState::Shared(used)) => {
+                let Some(remaining) = used.checked_sub(bytes) else {
+                    unreachable!("attachment transfer permit exceeds admitted buffer bytes");
+                };
+                *state = crate::error::TransferAdmissionState::Shared(remaining);
+            }
+            (PermitKind::Exclusive, crate::error::TransferAdmissionState::Exclusive) => {
+                *state = crate::error::TransferAdmissionState::Shared(0);
+            }
+            _ => unreachable!("attachment transfer permit/state invariant broken"),
+        }
+        self.budget.ready.notify_all();
+    }
+}
+
+fn parallel_each<T: Sync>(items: &[T], work: impl Fn(&T) -> Result<()> + Sync) -> Vec<Error> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let next = AtomicUsize::new(0);
+    let workers = TRANSFER_WORKERS.min(items.len());
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        let mut failures = Vec::new();
+        for _ in 0..workers {
+            let next = &next;
+            let work = &work;
+            match std::thread::Builder::new().spawn_scoped(scope, move || {
+                let mut failures = Vec::new();
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(index) else {
+                        break failures;
+                    };
+                    if let Err(error) = work(item) {
+                        failures.push(error);
+                    }
+                }
+            }) {
+                Ok(handle) => handles.push(handle),
+                Err(error) => failures.push(Error::Io(error)),
+            }
+        }
+        for handle in handles {
+            match handle.join() {
+                Ok(worker_failures) => failures.extend(worker_failures),
+                Err(payload) => failures.push(Error::WorkerPanic(payload.into())),
+            }
+        }
+        failures
+    })
+}
 
 /// Download attachments from one or more records or folders.
 #[derive(Args, Debug)]
@@ -116,16 +255,15 @@ struct Attachment {
     key:   AesKey,
 }
 
-impl TryFrom<&Value> for Attachment {
+impl TryFrom<&LegacyFile> for Attachment {
     type Error = Error;
 
-    fn try_from(file: &Value) -> Result<Self> {
-        let text = |field: &str| file.get(field).and_then(Value::as_str).unwrap_or_default().to_owned();
+    fn try_from(file: &LegacyFile) -> Result<Self> {
         Ok(Self {
-            id:    text("id"),
-            name:  text("name"),
-            title: text("title"),
-            key:   AesKey::try_from(b64_decode(&text("key"))?)?,
+            id:    file.id.as_deref().unwrap_or_default().to_owned(),
+            name:  file.name.as_deref().unwrap_or_default().to_owned(),
+            title: file.title.as_deref().unwrap_or_default().to_owned(),
+            key:   AesKey::try_from(b64_decode(file.key.as_deref().unwrap_or_default())?)?,
         })
     }
 }
@@ -138,12 +276,13 @@ impl TryFrom<&Record> for Attachment {
             return Err(Error::Generic(format!("record {} is not a file", file.uid)));
         }
         let text = |field: &str| {
-            file.data
-                .get(field)
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim()
-                .to_owned()
+            let value = match field {
+                "name" => file.data.name.as_deref(),
+                "title" => Some(file.data.title.as_str()),
+                "type" => Some(file.data.type_name.as_str()),
+                _ => file.data.extra.get(field).and_then(Value::as_str),
+            };
+            value.unwrap_or_default().trim().to_owned()
         };
         Ok(Self {
             id:    file.uid.to_string(),
@@ -161,12 +300,7 @@ impl Attachment {
             RecordKind::Legacy { extra } => {
                 extra
                     .as_ref()
-                    .and_then(|extra| extra.get("files"))
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .map(Self::try_from)
-                    .collect()
+                    .map_or(Ok(Vec::new()), |extra| extra.files.iter().map(Self::try_from).collect())
             }
             RecordKind::Typed | RecordKind::PamConfiguration => {
                 let mut attachments = Vec::new();
@@ -225,6 +359,12 @@ struct Ticket {
     cipher: Cipher,
 }
 
+struct DownloadJob<'a> {
+    attachment: &'a Attachment,
+    ticket:     Ticket,
+    path:       PathBuf,
+}
+
 /// Large attachments can legitimately take minutes; only the connection is time-limited.
 fn http_client() -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
@@ -237,6 +377,7 @@ struct DownloadOperation<'a> {
     session:  &'a mut Session,
     vault:    &'a Vault,
     http:     &'a reqwest::blocking::Client,
+    budget:   &'a TransferBudget,
     out_dir:  &'a Path,
     layout:   Layout,
     naming:   Naming,
@@ -261,6 +402,8 @@ impl DownloadOperation<'_> {
         } else {
             file_tickets(self.session, &attachments)?
         };
+        let mut jobs = Vec::with_capacity(attachments.len());
+        let mut reserved = HashSet::new();
         for (index, attachment) in attachments.iter().enumerate() {
             let ticket = match response.ticket(attachment, index) {
                 Ok(ticket) => ticket,
@@ -270,11 +413,28 @@ impl DownloadOperation<'_> {
                 }
             };
             let name = local_name(attachment, record, self.naming);
-            let path = free_path(&dir, &name, record.uid.as_ref(), &attachment.id);
-            eprintln!("Downloading '{}'", std::path::absolute(&path)?.display());
-            download(self.http, &ticket, &attachment.key, &path)?;
-            self.saved += 1;
+            let path = free_path(&dir, &name, record.uid.as_ref(), &attachment.id, &mut reserved);
+            eprintln!("Downloading '{}'", path.display());
+            jobs.push(DownloadJob {
+                attachment,
+                ticket,
+                path,
+            });
         }
+        let saved = std::sync::atomic::AtomicUsize::new(0);
+        self.failures.extend(parallel_each(&jobs, |job| {
+            download_buffered(self.http, self.budget, &job.ticket, &job.attachment.key, &job.path).map_err(
+                |error| {
+                    Error::Context {
+                        context: format!("downloading attachment {} to {}", job.attachment.id, job.path.display()),
+                        source:  Box::new(error),
+                    }
+                },
+            )?;
+            saved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }));
+        self.saved += saved.load(std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -311,20 +471,21 @@ impl Run for DownloadAttachment {
             Naming::Stored
         };
         let depth = if self.recursive { Depth::Subtree } else { Depth::Folder };
-        app.ensure_synced()?;
-        let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-        let session = &mut account.session;
-        let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-        let records = select_records(vault, &account.cwd, &self.records, depth);
+        let view = app.view()?;
+        let session = &mut *view.session;
+        let vault = view.vault;
+        let records = select_records(vault, view.cwd, &self.records, depth);
         if records.is_empty() {
             return Err(Error::Generic(format!("Record(s) \"{}\" not found", self.records.join(", "))));
         }
         std::fs::create_dir_all(&out_dir)?;
         let http = http_client()?;
+        let budget = TransferBudget::new();
         let mut operation = DownloadOperation {
             session,
             vault,
             http: &http,
+            budget: &budget,
             out_dir: &out_dir,
             layout,
             naming,
@@ -335,7 +496,24 @@ impl Run for DownloadAttachment {
         let result = records
             .into_iter()
             .try_for_each(|record| operation.download_record(record));
-        operation.finish(result)
+        let result = operation.finish(result);
+        match budget.finish() {
+            Ok(()) => result,
+            Err(error) => {
+                match result {
+                    Err(Error::DownloadBatch { mut failures }) => {
+                        failures.push(error);
+                        Err(Error::DownloadBatch { failures })
+                    }
+                    Err(failure) => {
+                        Err(Error::DownloadBatch {
+                            failures: vec![failure, error],
+                        })
+                    }
+                    Ok(()) => Err(error),
+                }
+            }
+        }
     }
 }
 
@@ -441,9 +619,9 @@ fn local_name(attachment: &Attachment, record: &Record, naming: Naming) -> Strin
 }
 
 /// Avoid replacing an existing download; use record and file UIDs to disambiguate collisions.
-fn free_path(dir: &Path, name: &str, record_uid: &str, file_id: &str) -> PathBuf {
+fn free_path(dir: &Path, name: &str, record_uid: &str, file_id: &str, reserved: &mut HashSet<PathBuf>) -> PathBuf {
     let path = dir.join(name);
-    if !path.exists() {
+    if !path.exists() && reserved.insert(path.clone()) {
         return path;
     }
     let stem = Path::new(name).file_stem().and_then(OsStr::to_str).unwrap_or(name);
@@ -455,14 +633,14 @@ fn free_path(dir: &Path, name: &str, record_uid: &str, file_id: &str) -> PathBuf
     let candidates = [record_uid, file_id];
     for suffix in candidates {
         let candidate = dir.join(format!("{stem}({suffix}){extension}"));
-        if !candidate.exists() {
+        if !candidate.exists() && reserved.insert(candidate.clone()) {
             return candidate;
         }
     }
     let mut suffix = 2u64;
     loop {
         let candidate = dir.join(format!("{stem}({file_id}-{suffix}){extension}"));
-        if !candidate.exists() {
+        if !candidate.exists() && reserved.insert(candidate.clone()) {
             return candidate;
         }
         suffix = suffix.saturating_add(1);
@@ -574,28 +752,49 @@ fn access_folder<'v>(vault: &'v Vault, record: &Record) -> Option<&'v str> {
         .map(|folder| folder.uid.as_ref())
 }
 
-/// Fetch and authenticate a signed download before writing any plaintext to disk.
-fn download(http: &reqwest::blocking::Client, ticket: &Ticket, key: &[u8], path: &Path) -> Result<()> {
+/// Fetch and decrypt before creating an output file; GCM authenticates, while legacy CBC only checks padding.
+fn download_buffered(
+    http: &reqwest::blocking::Client,
+    budget: &TransferBudget,
+    ticket: &Ticket,
+    key: &[u8],
+    path: &Path,
+) -> Result<()> {
     let mut response = http.get(&ticket.url).send()?;
     if !response.status().is_success() {
         return Err(Error::Generic(format!("HTTP status code {}", response.status().as_u16())));
     }
+    let expected = response
+        .content_length()
+        .map(usize::try_from)
+        .transpose()
+        .map_err(Error::Integer)?;
+    // Length headers are untrusted: read at most one extra byte and reject mismatches.
+    // ponytail: unknown or oversized bodies run alone, but a single encrypted file still buffers fully; streaming is the upgrade path.
+    let demand = match expected {
+        Some(length) => {
+            BufferDemand::Known(
+                length
+                    .checked_add(1 + 32)
+                    .ok_or_else(|| Error::Generic("download size overflow".into()))?,
+            )
+        }
+        None => BufferDemand::Unknown,
+    };
+    let _permit = budget.acquire(demand)?;
     let mut body = Vec::new();
-    if let Some(len) = response.content_length() {
-        let len = usize::try_from(len).map_err(|error| {
-            Error::Context {
-                context: format!("download size for {}", path.display()),
-                source:  Box::new(Error::Integer(error)),
-            }
-        })?;
-        body.try_reserve_exact(len).map_err(|error| {
-            Error::Context {
-                context: format!("reserving {len} bytes for {}", path.display()),
-                source:  Box::new(Error::Allocation(error)),
-            }
-        })?;
+    if let Some(length) = expected {
+        body.try_reserve_exact(length.saturating_add(1))
+            .map_err(Error::Allocation)?;
+        response
+            .take(u64::try_from(length.saturating_add(1))?)
+            .read_to_end(&mut body)?;
+        if body.len() != length {
+            return Err(Error::Generic(format!("download length changed for {}", path.display())));
+        }
+    } else {
+        response.read_to_end(&mut body)?;
     }
-    response.read_to_end(&mut body)?;
     let plain = ticket.cipher.open(&mut body, key)?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -632,6 +831,16 @@ struct UploadFile {
     key:   AesKey,
 }
 
+struct UploadTarget<'a> {
+    file:                &'a UploadFile,
+    url:                 &'a str,
+    success_status_code: i32,
+    boundary:            String,
+    head:                std::sync::Arc<[u8]>,
+    tail:                std::sync::Arc<[u8]>,
+    metadata_bytes:      usize,
+}
+
 struct LocalFile {
     path: PathBuf,
     name: String,
@@ -665,7 +874,17 @@ impl TryFrom<&UploadFile> for Vec<u8> {
                 source:  Box::new(Error::Allocation(error)),
             }
         })?;
-        std::fs::File::open(&file.local.path)?.read_to_end(&mut frame)?;
+        let expected = file
+            .local
+            .size
+            .checked_add(1)
+            .ok_or_else(|| Error::Generic(format!("{} does not fit in memory", file.local.name)))?;
+        std::fs::File::open(&file.local.path)?
+            .take(u64::try_from(expected)?)
+            .read_to_end(&mut frame)?;
+        if frame.len() != file.local.size.saturating_add(12) {
+            return Err(Error::Generic(format!("File {} changed size while uploading", file.local.name)));
+        }
         frame.extend_from_slice(&[0; 16]);
         crypto::encrypt_aes_v2_in_place(&mut frame, &file.key)?;
         Ok(frame)
@@ -742,42 +961,29 @@ impl std::fmt::Display for MimeType {
 
 impl Run for UploadAttachment {
     fn run(self, app: &mut App) -> Result<()> {
-        let files = self.files.iter().map(LocalFile::try_from).collect::<Result<Vec<_>>>()?;
-        app.ensure_synced()?;
-        let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-        let session = &mut account.session;
-        let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-        let cwd = &account.cwd;
+        let view = app.view()?;
+        let session = &mut *view.session;
+        let vault = view.vault;
+        let cwd = view.cwd;
         let record = vault
             .resolve_record(cwd, &self.record)
             .ok_or_else(|| Error::Generic(format!("Record UID not found for record \"{}\"", self.record)))?;
-        if !matches!(&record.kind, RecordKind::Typed) {
-            return Err(Error::Generic(format!(
-                "Cannot attach files to \"{}\": only typed (v3) records are supported",
-                record.title()
-            )));
-        }
-
+        let typed_record = TypedRecord::try_from(record)?;
+        let record = typed_record.as_ref();
+        let files = self.files.iter().map(LocalFile::try_from).collect::<Result<Vec<_>>>()?;
         let files: Vec<UploadFile> = files.into_iter().map(UploadFile::from).collect();
         let add = add_request(&files, &session.data_key)?;
         let body = session.rest.execute("vault/files_add", &session.session_token, &add)?;
         let added = FilesAddResponse::decode(body.as_slice())?;
         let http = http_client()?;
-        for file in &files {
-            let target = added
-                .files
-                .iter()
-                .find(|status| status.record_uid == file.uid && status.status == FileAddResult::FaSuccess as i32)
-                .ok_or_else(|| Error::Generic(format!("Uploading file {}: Get upload URL error.", file.local.name)))?;
-            send(&http, target, file)?;
-        }
+        upload_files(&http, &files, &added.files)?;
 
         let key_type = if session.summary.forbid_key_type2 {
             RecordKeyType::EncryptedByPublicKeyEcc
         } else {
             RecordKeyType::EncryptedByPublicKey
         };
-        let rq = link_request(record, &files, key_type)?;
+        let rq = link_request(typed_record, &files, key_type)?;
         let body = session
             .rest
             .execute("vault/records_update", &session.session_token, &rq)?;
@@ -788,8 +994,13 @@ impl Run for UploadAttachment {
             .find(|status| rq.records.iter().any(|request| request.record_uid == status.record_uid))
             .ok_or_else(|| Error::Generic(format!("Updating record {}: missing response status.", record.uid)))?;
         if status.status != RecordModifyResult::RsSuccess as i32 {
-            let name = RecordModifyResult::try_from(status.status).map_or("UNKNOWN", |result| result.as_str_name());
-            return Err(Error::api(name, status.message.clone()));
+            let result = RecordModifyResult::try_from(status.status).map_err(|source| {
+                Error::Context {
+                    context: format!("updating record {}: invalid response status", record.uid),
+                    source:  Box::new(Error::UnknownEnum(source)),
+                }
+            })?;
+            return Err(Error::api(result.as_str_name(), status.message.clone()));
         }
         eprintln!("Uploaded {} file(s) to \"{}\"", files.len(), record.title());
         app.account.as_mut().ok_or(Error::NotLoggedIn)?.vault = None;
@@ -821,10 +1032,37 @@ fn add_request(files: &[UploadFile], data_key: &[u8]) -> Result<FilesAddRequest>
     })
 }
 
-fn send(http: &reqwest::blocking::Client, target: &FileAddStatus, file: &UploadFile) -> Result<()> {
-    let frame = Vec::try_from(file)?;
+fn value_heap_bytes(value: &Value) -> usize {
+    match value {
+        Value::String(value) => value.capacity(),
+        Value::Array(values) => {
+            values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Value>())
+                .saturating_add(values.iter().map(value_heap_bytes).fold(0usize, usize::saturating_add))
+        }
+        Value::Object(fields) => {
+            fields
+                .iter()
+                .map(|(name, value)| {
+                    name.capacity()
+                        .saturating_add(value_heap_bytes(value))
+                        .saturating_add(256)
+                })
+                .fold(0usize, usize::saturating_add)
+        }
+        _ => 0,
+    }
+}
+
+fn prepare_upload<'a>(file: &'a UploadFile, status: &'a FileAddStatus) -> Result<UploadTarget<'a>> {
+    let fields: serde_json::Map<String, Value> = serde_json::from_str(&status.parameters).map_err(|source| {
+        Error::Context {
+            context: format!("uploading file {}: malformed upload parameters", file.local.name),
+            source:  Box::new(Error::Json(source)),
+        }
+    })?;
     let boundary = data_encoding::HEXLOWER.encode(&crypto::random_bytes(16));
-    let fields: serde_json::Map<String, Value> = serde_json::from_str(&target.parameters)?;
     let mut head = String::new();
     for (name, value) in &fields {
         let value = value.as_str().map_or_else(|| value.to_string(), str::to_owned);
@@ -839,41 +1077,175 @@ fn send(http: &reqwest::blocking::Client, target: &FileAddStatus, file: &UploadF
     )
     .expect("writing multipart framing to a String cannot fail");
     let tail = format!("\r\n--{boundary}--\r\n");
-    let len = (head.len() + frame.len() + tail.len()) as u64;
+    let parsed_metadata = fields
+        .iter()
+        .map(|(name, value)| {
+            name.capacity()
+                .saturating_add(value_heap_bytes(value))
+                .saturating_add(256)
+        })
+        .fold(0usize, usize::saturating_add);
+    let metadata_bytes = status
+        .parameters
+        .capacity()
+        .saturating_add(status.url.capacity())
+        .saturating_add(head.capacity())
+        .saturating_add(tail.capacity())
+        .saturating_add(boundary.capacity())
+        .saturating_add(32)
+        .saturating_add(parsed_metadata);
+    Ok(UploadTarget {
+        file,
+        url: &status.url,
+        success_status_code: status.success_status_code,
+        boundary,
+        head: std::sync::Arc::from(head.into_bytes()),
+        tail: std::sync::Arc::from(tail.into_bytes()),
+        metadata_bytes,
+    })
+}
+
+fn send(http: &reqwest::blocking::Client, target: &UploadTarget<'_>) -> Result<()> {
+    let frame = Vec::try_from(target.file)?;
+    let length = target
+        .head
+        .len()
+        .checked_add(frame.len())
+        .and_then(|length| length.checked_add(target.tail.len()))
+        .ok_or_else(|| Error::Generic(format!("multipart upload {} is too large", target.file.local.name)))?;
     let body = reqwest::blocking::Body::sized(
-        std::io::Cursor::new(head.into_bytes())
+        std::io::Cursor::new(std::sync::Arc::clone(&target.head))
             .chain(std::io::Cursor::new(frame))
-            .chain(std::io::Cursor::new(tail.into_bytes())),
-        len,
+            .chain(std::io::Cursor::new(std::sync::Arc::clone(&target.tail))),
+        u64::try_from(length)?,
     );
     let response = http
-        .post(&target.url)
-        .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+        .post(target.url)
+        .header("Content-Type", format!("multipart/form-data; boundary={}", target.boundary))
         .body(body)
         .send()?;
     let status = response.status().as_u16();
     if i32::from(status) != target.success_status_code {
-        return Err(Error::Generic(format!("Uploading file {}: HTTP status code {status}", file.local.name)));
+        return Err(Error::Generic(format!("Uploading file {}: HTTP status code {status}", target.file.local.name)));
     }
     Ok(())
 }
 
-fn link_request(record: &Record, files: &[UploadFile], key_type: RecordKeyType) -> Result<RecordsUpdateRequest> {
+fn upload_files(http: &reqwest::blocking::Client, files: &[UploadFile], statuses: &[FileAddStatus]) -> Result<()> {
+    let mut targets = Vec::with_capacity(files.len());
+    let mut failures = Vec::new();
+    for file in files {
+        let mut matching = statuses.iter().filter(|status| status.record_uid == file.uid);
+        match (matching.next(), matching.next()) {
+            (Some(status), None) if status.status == FileAddResult::FaSuccess as i32 && !status.url.is_empty() => {
+                if !(200..300).contains(&status.success_status_code) {
+                    failures.push(Error::Generic(format!(
+                        "Uploading file {}: invalid expected success status {}.",
+                        file.local.name, status.success_status_code
+                    )));
+                } else if let Err(error) = http.post(&status.url).build() {
+                    failures.push(Error::Context {
+                        context: format!("uploading file {}: malformed upload URL", file.local.name),
+                        source:  Box::new(Error::Http(error)),
+                    });
+                } else {
+                    match prepare_upload(file, status) {
+                        Ok(target) => targets.push(target),
+                        Err(error) => failures.push(error),
+                    }
+                }
+            }
+            (Some(status), None) => {
+                failures.push(Error::Generic(format!(
+                    "Uploading file {}: refused with status {} or missing upload URL.",
+                    file.local.name, status.status
+                )))
+            }
+            (None, _) => {
+                failures.push(Error::Generic(format!("Uploading file {}: missing upload status.", file.local.name)))
+            }
+            (Some(_), Some(_)) => {
+                failures.push(Error::Generic(format!("Uploading file {}: duplicate upload statuses.", file.local.name)))
+            }
+        }
+    }
+    for status in statuses {
+        if !files.iter().any(|file| file.uid == status.record_uid) {
+            failures.push(Error::Generic("files_add response contains an unrequested file status.".into()));
+        }
+    }
+    if !failures.is_empty() {
+        return Err(Error::AttachmentBatch { failures });
+    }
+
+    let metadata_bytes = targets
+        .iter()
+        .map(|target| target.metadata_bytes)
+        .fold(0usize, usize::saturating_add)
+        .saturating_add(
+            targets
+                .capacity()
+                .saturating_mul(std::mem::size_of::<UploadTarget<'_>>()),
+        );
+    let mut start = 0;
+    while start < targets.len() {
+        let mut end = start;
+        let mut reserved = metadata_bytes;
+        while let Some(target) = targets.get(end) {
+            // ponytail: if total metadata or one file exceeds budget, uploads run one at a time; whole-file buffers may exceed 64 MiB. Streaming is the upgrade path.
+            let estimate = target.file.local.size.saturating_add(28);
+            if end > start && reserved.saturating_add(estimate) > TRANSFER_BUFFER_BUDGET {
+                break;
+            }
+            reserved = reserved.saturating_add(estimate);
+            end += 1;
+            if reserved > TRANSFER_BUFFER_BUDGET {
+                break;
+            }
+        }
+        let batch = targets
+            .get(start..end)
+            .ok_or_else(|| Error::Generic("invalid upload batch range".into()))?;
+        failures.extend(parallel_each(batch, |target| {
+            send(http, target).map_err(|error| {
+                Error::Context {
+                    context: format!("uploading {}", target.file.local.name),
+                    source:  Box::new(error),
+                }
+            })
+        }));
+        start = end;
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::AttachmentBatch { failures })
+    }
+}
+
+fn link_request(
+    record: TypedRecord<'_>,
+    files: &[UploadFile],
+    key_type: RecordKeyType,
+) -> Result<RecordsUpdateRequest> {
+    let record = record.as_ref();
     let mut data = record.data.clone();
-    let fields = data
-        .as_object_mut()
-        .map(|object| object.entry("fields").or_insert_with(|| serde_json::json!([])))
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| Error::Generic(format!("Record {} has malformed data", record.uid)))?;
-    let refs = files.iter().map(|file| Value::from(b64_encode(&file.uid)));
-    let listed = fields
+    let refs: Vec<Value> = files.iter().map(|file| Value::from(b64_encode(&file.uid))).collect();
+    let listed = data
+        .fields
         .iter_mut()
-        .find(|field| field.get("type").and_then(Value::as_str) == Some("fileRef"))
-        .and_then(|field| field.get_mut("value"))
+        .find(|field| field.ty == "fileRef")
+        .and_then(|field| field.value.as_mut())
         .and_then(Value::as_array_mut);
     match listed {
         Some(listed) => listed.extend(refs),
-        None => fields.push(serde_json::json!({"type": "fileRef", "value": refs.collect::<Vec<_>>()})),
+        None => {
+            data.fields.push(RecordField {
+                ty: "fileRef".into(),
+                value: Some(Value::Array(refs)),
+                ..RecordField::default()
+            })
+        }
     }
     let mut json = serde_json::to_vec(&data)?;
     json.resize(json.len().max(384).next_multiple_of(16), b' ');
@@ -921,7 +1293,7 @@ mod tests {
         Record {
             uid: Uid::from(uid.as_bytes()),
             kind,
-            data,
+            data: serde_json::from_value(data).unwrap(),
             revision: 0,
             shared: false,
             client_modified_time: 0,
@@ -942,6 +1314,70 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("keeper-cli-test-{}", b64_encode(&crypto::random_bytes(8))));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn transfer_budget_waits_for_shared_permits_before_exclusive_work() {
+        let budget = std::sync::Arc::new(TransferBudget::new());
+        let half = TRANSFER_BUFFER_BUDGET / 2;
+        let first = budget.acquire(BufferDemand::Known(half)).unwrap();
+        let second = budget.acquire(BufferDemand::Known(half)).unwrap();
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let (acquired_sender, acquired_receiver) = std::sync::mpsc::channel();
+        let worker_budget = std::sync::Arc::clone(&budget);
+        let worker = std::thread::spawn(move || {
+            started_sender.send(()).unwrap();
+            let permit = worker_budget.acquire(BufferDemand::Unknown).unwrap();
+            acquired_sender.send(()).unwrap();
+            drop(permit);
+        });
+        started_receiver.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        assert!(matches!(acquired_receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        drop(first);
+        drop(second);
+        acquired_receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        worker.join().unwrap();
+        assert!(matches!(*budget.state.lock().unwrap(), crate::error::TransferAdmissionState::Shared(0)));
+    }
+
+    #[test]
+    fn transfer_budget_poison_errors_retain_owned_sources() {
+        let budget = std::sync::Arc::new(TransferBudget::new());
+        let poisoner = std::sync::Arc::clone(&budget);
+        assert!(
+            std::thread::spawn(move || {
+                let _state = poisoner.state.lock().unwrap();
+                panic!("poison transfer budget in regression test");
+            })
+            .join()
+            .is_err()
+        );
+
+        let acquire_error = match budget.acquire(BufferDemand::Known(1)) {
+            Ok(_) => panic!("poisoned admission lock must fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(&acquire_error, Error::TransferBudgetPoisoned { .. }));
+        assert!(
+            std::error::Error::source(&acquire_error)
+                .and_then(|source| {
+                    source.downcast_ref::<std::sync::PoisonError<crate::error::TransferAdmissionState>>()
+                })
+                .is_some()
+        );
+
+        let budget = std::sync::Arc::try_unwrap(budget).unwrap_or_else(|_| panic!("budget still shared"));
+        let finish_error = budget.finish().expect_err("final budget check retains mutex poison");
+        assert!(
+            std::error::Error::source(&finish_error)
+                .and_then(|source| {
+                    source.downcast_ref::<std::sync::PoisonError<crate::error::TransferAdmissionState>>()
+                })
+                .is_some()
+        );
     }
 
     fn attachment(name: &str) -> Attachment {
@@ -1001,7 +1437,10 @@ mod tests {
             "OLD",
             RecordKind::Legacy {
                 extra: Some(
-                    json!({"files": [{"id": "ATT1", "name": "scan.pdf", "title": "Scan", "key": b64_encode(&legacy_key)}]}),
+                    serde_json::from_value(json!({
+                        "files": [{"id": "ATT1", "name": "scan.pdf", "title": "Scan", "key": b64_encode(&legacy_key)}]
+                    }))
+                    .unwrap(),
                 ),
             },
             json!({"title": "Legacy"}),
@@ -1015,7 +1454,7 @@ mod tests {
         let malformed = record(
             "BAD",
             RecordKind::Legacy {
-                extra: Some(json!({"files": [{"id": "ATT2", "key": "***"}]})),
+                extra: Some(serde_json::from_value(json!({"files": [{"id": "ATT2", "key": "***"}]})).unwrap()),
             },
             json!({}),
             1,
@@ -1074,9 +1513,10 @@ mod tests {
         let dir = temp_dir();
         let record_uid = Uid::from(b"REC".as_slice()).to_string();
         let file_uid = Uid::from(b"FILE".as_slice()).to_string();
+        let mut reserved = HashSet::new();
         let mut saved = Vec::new();
         for marker in 0..4u8 {
-            let path = free_path(&dir, "a.tar.gz", &record_uid, &file_uid);
+            let path = free_path(&dir, "a.tar.gz", &record_uid, &file_uid, &mut reserved);
             assert_eq!(path.parent(), Some(dir.as_path()));
             assert!(!saved.contains(&path));
             std::fs::write(&path, [marker]).unwrap();
@@ -1252,12 +1692,14 @@ mod tests {
         let mut parent = record(
             "PARENT",
             RecordKind::Typed,
-            json!({"title": "Server", "fields": [{"type": "login", "value": ["root"]}, {"type": "fileRef", "value": ["OLD"]}]}),
+            json!({"title": "Server", "type": "login", "extension": {"keep": true}, "fields": [{"type": "text", "value": ["keep text"]}, {"type": "login", "value": ["root"]}, {"type": "fileRef", "value": ["OLD"]}]}),
             1,
         );
         parent.uid = uid;
         parent.revision = 41;
-        let update = link_request(&parent, &files, RecordKeyType::EncryptedByPublicKeyEcc).unwrap();
+        let update =
+            link_request(TypedRecord::try_from(&parent).unwrap(), &files, RecordKeyType::EncryptedByPublicKeyEcc)
+                .unwrap();
         assert_eq!(update.security_data_key_type, RecordKeyType::EncryptedByPublicKeyEcc as i32);
         let [updated] = update.records.as_slice() else {
             panic!("expected one record update");
@@ -1267,22 +1709,22 @@ mod tests {
         let plain = crypto::decrypt_aes_v2(&updated.data, &parent.key).unwrap();
         assert!(plain.len() >= 384 && plain.len().is_multiple_of(16));
         let data: Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(data.get("type").and_then(Value::as_str), Some("login"));
+        assert_eq!(data.get("extension"), Some(&json!({"keep": true})));
         let fields = data
             .get("fields")
             .and_then(Value::as_array)
             .expect("updated fields are an array");
-        let parent_fields = parent
-            .data
-            .get("fields")
-            .and_then(Value::as_array)
-            .expect("parent fields are an array");
-        let [login_field, file_field] = fields.as_slice() else {
-            panic!("expected login and file-reference fields");
+        let parent_fields = parent.data.fields.as_slice();
+        let [text_field, login_field, file_field] = fields.as_slice() else {
+            panic!("expected text, login, and file-reference fields");
         };
-        let [parent_login_field, _parent_file_field] = parent_fields.as_slice() else {
-            panic!("expected login and file-reference fixture fields");
+        let [parent_text_field, parent_login_field, _parent_file_field] = parent_fields else {
+            panic!("expected text, login, and file-reference fixture fields");
         };
-        assert_eq!(login_field, parent_login_field);
+        assert_eq!(text_field, &serde_json::to_value(parent_text_field).unwrap());
+        assert_eq!(text_field.get("type").and_then(Value::as_str), Some("text"));
+        assert_eq!(login_field, &serde_json::to_value(parent_login_field).unwrap());
         assert_eq!(
             file_field.get("value"),
             Some(&json!(["OLD", b64_encode(&file_one.uid), b64_encode(&file_two.uid)]))
@@ -1294,8 +1736,12 @@ mod tests {
             assert_eq!(linked_key.as_slice(), &*file.key);
         }
         let no_fields = record("P2", RecordKind::Typed, json!({"title": "A"}), 1);
-        let no_fields_update =
-            link_request(&no_fields, std::slice::from_ref(file_two), RecordKeyType::EncryptedByPublicKey).unwrap();
+        let no_fields_update = link_request(
+            TypedRecord::try_from(&no_fields).unwrap(),
+            std::slice::from_ref(file_two),
+            RecordKeyType::EncryptedByPublicKey,
+        )
+        .unwrap();
         let [no_fields_record] = no_fields_update.records.as_slice() else {
             panic!("expected one empty-record update");
         };
@@ -1311,14 +1757,43 @@ mod tests {
         };
         assert_eq!(file_ref_field.get("type").and_then(Value::as_str), Some("fileRef"));
         assert_eq!(file_ref_field.get("value"), Some(&json!([b64_encode(&file_two.uid)])));
-        let malformed = record("P3", RecordKind::Typed, json!(["not", "an", "object"]), 1);
-        assert!(link_request(&malformed, std::slice::from_ref(file_two), RecordKeyType::EncryptedByPublicKey).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     struct TestServer {
         url:    String,
         worker: std::thread::JoinHandle<Vec<u8>>,
+    }
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0; 16 * 1024];
+        let mut total = None;
+        while total.is_none_or(|total| request.len() < total) {
+            let read = stream.read(&mut chunk).unwrap();
+            assert!(read > 0, "client hung up mid-request");
+            request.extend_from_slice(chunk.get(..read).expect("read count fits chunk buffer"));
+            if total.is_none()
+                && let Some(head_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                let (head_bytes, _) = request.split_at_checked(head_end).expect("delimiter is in request");
+                let head = String::from_utf8_lossy(head_bytes).to_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .map_or(0, |length| length.trim().parse().unwrap());
+                total = Some(
+                    head_end
+                        .checked_add(4)
+                        .and_then(|head| head.checked_add(length))
+                        .expect("request length fits usize"),
+                );
+            }
+        }
+        request
     }
 
     fn serve_once(status: &'static str, reply: Vec<u8>) -> TestServer {
@@ -1337,34 +1812,7 @@ mod tests {
                 }
             };
             stream.set_nonblocking(false).unwrap();
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
-                .unwrap();
-            let mut request = Vec::new();
-            let mut chunk = [0; 16 * 1024];
-            let mut total = None;
-            while total.is_none_or(|total| request.len() < total) {
-                let read = stream.read(&mut chunk).unwrap();
-                assert!(read > 0, "client hung up mid-request");
-                request.extend_from_slice(chunk.get(..read).expect("read count fits chunk buffer"));
-                if total.is_none()
-                    && let Some(head_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
-                {
-                    let (head_bytes, frame) = request.split_at_checked(head_end).expect("delimiter is in request");
-                    let _frame = frame.strip_prefix(b"\r\n\r\n").expect("delimiter was found");
-                    let head = String::from_utf8_lossy(head_bytes).to_lowercase();
-                    let length = head
-                        .lines()
-                        .find_map(|line| line.strip_prefix("content-length: "))
-                        .map_or(0, |length| length.trim().parse().unwrap());
-                    total = Some(
-                        head_end
-                            .checked_add(4)
-                            .and_then(|head| head.checked_add(length))
-                            .expect("request length fits usize"),
-                    );
-                }
-            }
+            let request = read_http_request(&mut stream);
             write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", reply.len())
                 .unwrap();
             stream.write_all(&reply).unwrap();
@@ -1372,8 +1820,299 @@ mod tests {
         });
         TestServer { url, worker }
     }
+    struct RestFixture {
+        url:    String,
+        worker: std::thread::JoinHandle<Vec<String>>,
+        stop:   std::sync::mpsc::Sender<()>,
+    }
+
+    fn rest_fixture(transmission_key: [u8; 32], upload_url: String) -> RestFixture {
+        use crate::proto::authentication::{ApiRequest, ApiRequestPayload};
+        use crate::proto::records::{FilesAddRequest, FilesAddResponse, RecordsModifyResponse, RecordsUpdateRequest};
+
+        fn serve_rest_request(
+            stream: &mut std::net::TcpStream,
+            transmission_key: &[u8; 32],
+            upload_url: &str,
+            file_keys: &mut Vec<(Vec<u8>, Vec<u8>)>,
+            paths: &mut Vec<String>,
+        ) {
+            let request = read_http_request(stream);
+            let head_end = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .expect("REST request contains a header delimiter");
+            let (headers, frame) = request
+                .split_at_checked(head_end)
+                .expect("header delimiter is in request");
+            let path = String::from_utf8_lossy(headers)
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .expect("REST request line has a path")
+                .to_owned();
+            let body = frame.strip_prefix(b"\r\n\r\n").expect("header delimiter was found");
+            let request = ApiRequest::decode(body).unwrap();
+            let decrypted = crypto::decrypt_aes_v2(&request.encrypted_payload, transmission_key).unwrap();
+            let payload = ApiRequestPayload::decode(decrypted.as_slice()).unwrap();
+            let response = match path.as_str() {
+                "/api/rest/vault/files_add" => {
+                    let added = FilesAddRequest::decode(payload.payload.as_slice()).unwrap();
+                    FilesAddResponse {
+                        files: added
+                            .files
+                            .iter()
+                            .map(|file| {
+                                file_keys.push((
+                                    file.record_uid.clone(),
+                                    crypto::decrypt_aes_v2(&file.record_key, &[9; 32]).unwrap(),
+                                ));
+                                FileAddStatus {
+                                    record_uid: file.record_uid.clone(),
+                                    url: upload_url.to_owned(),
+                                    parameters: "{}".into(),
+                                    success_status_code: 201,
+                                    status: FileAddResult::FaSuccess as i32,
+                                    ..Default::default()
+                                }
+                            })
+                            .collect(),
+                        ..Default::default()
+                    }
+                    .encode_to_vec()
+                }
+                "/api/rest/vault/records_update" => {
+                    let update = RecordsUpdateRequest::decode(payload.payload.as_slice()).unwrap();
+                    let Some(update_record) = update.records.first() else {
+                        panic!("records_update fixture received no record");
+                    };
+                    assert_eq!(update_record.record_links_add.len(), 1);
+                    let Some(link) = update_record.record_links_add.first() else {
+                        panic!("records_update fixture received no file link");
+                    };
+                    let Some((file_uid, file_key)) = file_keys.iter().find(|(uid, _)| uid == &link.record_uid) else {
+                        panic!("records_update fixture linked an unregistered file");
+                    };
+                    assert_eq!(&link.record_uid, file_uid);
+                    assert_eq!(
+                        crypto::decrypt_aes_v2(&link.record_key, &[1; 32]).unwrap().as_slice(),
+                        file_key.as_slice()
+                    );
+                    let data = crypto::decrypt_aes_v2(&update_record.data, &[1; 32]).unwrap();
+                    let data: Value = serde_json::from_slice(&data).unwrap();
+                    let fields = data
+                        .get("fields")
+                        .and_then(Value::as_array)
+                        .expect("updated record fields");
+                    let file_ref = Value::String(b64_encode(file_uid));
+                    assert!(fields.iter().any(|field| {
+                        field.get("type").and_then(Value::as_str) == Some("fileRef")
+                            && field
+                                .get("value")
+                                .and_then(Value::as_array)
+                                .is_some_and(|values| values.contains(&file_ref))
+                    }));
+                    let mut response = RecordsModifyResponse::default();
+                    response.records.push(Default::default());
+                    let Some(status) = response.records.first_mut() else {
+                        panic!("records_update response fixture missing its status");
+                    };
+                    status.record_uid = update_record.record_uid.clone();
+                    status.status = RecordModifyResult::RsSuccess as i32;
+                    response.encode_to_vec()
+                }
+                _ => panic!("unexpected REST endpoint: {path}"),
+            };
+            paths.push(path);
+            let response = crypto::encrypt_aes_v2(&response, transmission_key).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response.len()
+            )
+            .unwrap();
+            stream.write_all(&response).unwrap();
+        }
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let mut file_keys = Vec::new();
+            let mut paths = Vec::new();
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        serve_rest_request(&mut stream, &transmission_key, &upload_url, &mut file_keys, &mut paths);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        match stopped.recv_timeout(std::time::Duration::from_millis(10)) {
+                            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        }
+                    }
+                    Err(error) => panic!("accepting REST fixture request: {error}"),
+                }
+            }
+            paths
+        });
+        RestFixture { url, worker, stop }
+    }
+    struct UploadRunOutcome {
+        result:            Result<()>,
+        routes:            Vec<String>,
+        upload_request:    Vec<u8>,
+        vault_invalidated: bool,
+    }
+
+    fn run_upload_fixture(upload_status: &'static str) -> UploadRunOutcome {
+        let dir = temp_dir();
+        let file_path = dir.join("run.txt");
+        std::fs::write(&file_path, b"run-level payload").unwrap();
+        let transmission_key = [7; 32];
+        let upload_server = serve_once(upload_status, Vec::new());
+        let rest = rest_fixture(transmission_key, upload_server.url.clone());
+        let parent = record("UPLOAD_RECORD", RecordKind::Typed, json!({"title": "Server"}), 1);
+        let record_selector = parent.uid.to_string();
+        let session = crate::auth::Session {
+            rest:          crate::rest::RestContext::for_test(
+                reqwest::Url::parse(&rest.url).unwrap(),
+                transmission_key,
+            )
+            .unwrap(),
+            user:          "fixture@example.test".into(),
+            session_token: vec![1, 2, 3],
+            data_key:      key(9),
+            rsa_key:       None,
+            ecc_key:       None,
+            summary:       Default::default(),
+        };
+        let mut app = App {
+            settings: crate::settings::Settings::default(),
+            user:     None,
+            password: crate::auth::Password::Prompt,
+            account:  Some(crate::commands::Account {
+                session,
+                vault: Some(vault_of([parent])),
+                cwd: Location::Root,
+            }),
+        };
+        let result = UploadAttachment {
+            files:  vec![UserPath(file_path)],
+            record: record_selector,
+        }
+        .run(&mut app);
+        let vault_invalidated = app.account.as_ref().is_some_and(|account| account.vault.is_none());
+        rest.stop.send(()).unwrap();
+        let requests = rest.worker.join().unwrap();
+        let upload_request = upload_server.worker.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        UploadRunOutcome {
+            result,
+            routes: requests,
+            upload_request,
+            vault_invalidated,
+        }
+    }
+
+    fn serve_concurrent(
+        status: &'static str,
+        reply: Vec<u8>,
+        requests: usize,
+    ) -> (String, std::thread::JoinHandle<(usize, usize)>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/blob", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let peak = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut handlers = Vec::with_capacity(requests);
+            for _ in 0..requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let reply = reply.clone();
+                let active = std::sync::Arc::clone(&active);
+                let peak = std::sync::Arc::clone(&peak);
+                handlers.push(std::thread::spawn(move || {
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    let mut chunk = [0; 16 * 1024];
+                    let mut total = None;
+                    while total.is_none_or(|total| request.len() < total) {
+                        let read = stream.read(&mut chunk).unwrap();
+                        assert!(read > 0, "client hung up mid-request");
+                        request.extend_from_slice(chunk.get(..read).expect("read count fits chunk buffer"));
+                        if total.is_none()
+                            && let Some(head_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            let (head_bytes, _) = request.split_at_checked(head_end).expect("delimiter is in request");
+                            let head = String::from_utf8_lossy(head_bytes).to_lowercase();
+                            let length = head
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length: "))
+                                .map_or(0, |length| length.trim().parse().unwrap());
+                            total = Some(
+                                head_end
+                                    .checked_add(4)
+                                    .and_then(|head| head.checked_add(length))
+                                    .unwrap(),
+                            );
+                        }
+                    }
+                    let now = active.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    peak.fetch_max(now, std::sync::atomic::Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    active.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", reply.len())
+                        .unwrap();
+                    stream.write_all(&reply).unwrap();
+                }));
+            }
+            for handler in handlers {
+                handler.join().unwrap();
+            }
+            (active.load(std::sync::atomic::Ordering::Relaxed), peak.load(std::sync::atomic::Ordering::Relaxed))
+        });
+        (url, worker)
+    }
+
     #[test]
-    fn download_http_authenticates_before_writing_plaintext() {
+    fn upload_worker_count_is_bounded_against_concurrent_local_http_requests() {
+        let dir = temp_dir();
+        let mut files = Vec::new();
+        for index in 0..8u8 {
+            let path = dir.join(format!("file-{index}.txt"));
+            std::fs::write(&path, [index]).unwrap();
+            files.push(UploadFile {
+                local: LocalFile::try_from(&UserPath(path)).unwrap(),
+                uid:   vec![index; 16],
+                key:   key(index),
+            });
+        }
+        let (url, server) = serve_concurrent("201 Created", Vec::new(), files.len());
+        let statuses = files
+            .iter()
+            .map(|file| {
+                FileAddStatus {
+                    record_uid: file.uid.clone(),
+                    url: url.clone(),
+                    parameters: "{}".into(),
+                    success_status_code: 201,
+                    status: FileAddResult::FaSuccess as i32,
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        upload_files(&http, &files, &statuses).unwrap();
+        let (active, peak) = server.join().unwrap();
+        assert_eq!(active, 0);
+        assert!(peak > 1 && peak <= TRANSFER_WORKERS, "peak concurrent requests: {peak}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn download_decrypts_before_writing_plaintext() {
         let dir = temp_dir();
         let path = dir.join("out.bin");
         let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
@@ -1384,8 +2123,9 @@ mod tests {
             (Cipher::Cbc, crypto::encrypt_cbc::<Pkcs7>(&plain, &key).unwrap()),
         ] {
             let server = serve_once("200 OK", sealed);
-            download(
+            download_buffered(
                 &http,
+                &TransferBudget::new(),
                 &Ticket {
                     url: server.url.clone(),
                     cipher,
@@ -1401,8 +2141,9 @@ mod tests {
         }
         let server = serve_once("403 Forbidden", b"denied".to_vec());
         assert!(
-            download(
+            download_buffered(
                 &http,
+                &TransferBudget::new(),
                 &Ticket {
                     url:    server.url.clone(),
                     cipher: Cipher::Gcm,
@@ -1419,11 +2160,31 @@ mod tests {
         *forged.get_mut(100).expect("GCM fixture is long enough") ^= 1;
         let server = serve_once("200 OK", forged);
         assert!(
-            download(
+            download_buffered(
                 &http,
+                &TransferBudget::new(),
                 &Ticket {
                     url:    server.url.clone(),
                     cipher: Cipher::Gcm,
+                },
+                &key,
+                &path
+            )
+            .is_err()
+        );
+        server.worker.join().unwrap();
+        assert!(!path.exists());
+        // Legacy CBC rejects invalid padding before output creation, but has no MAC for data integrity.
+        let mut bad_padding = crypto::encrypt_cbc::<Pkcs7>(b"15-byte-message", &key).unwrap();
+        *bad_padding.get_mut(15).expect("CBC fixture contains a 16-byte IV") ^= 1;
+        let server = serve_once("200 OK", bad_padding);
+        assert!(
+            download_buffered(
+                &http,
+                &TransferBudget::new(),
+                &Ticket {
+                    url:    server.url.clone(),
+                    cipher: Cipher::Cbc,
                 },
                 &key,
                 &path
@@ -1436,9 +2197,141 @@ mod tests {
     }
 
     #[test]
+    fn unknown_length_chunked_download_uses_exclusive_admission() {
+        let dir = temp_dir();
+        let path = dir.join("chunked.bin");
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let key = [8u8; 32];
+        let plain = b"chunked attachment body";
+        let sealed = crypto::encrypt_aes_v2(plain, &key).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/blob", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let read = stream.read(&mut request).unwrap();
+            assert!(
+                request
+                    .get(..read)
+                    .expect("read count fits buffer")
+                    .starts_with(b"GET /blob HTTP/1.1\r\n")
+            );
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:X}\r\n",
+                sealed.len()
+            )
+            .unwrap();
+            stream.write_all(&sealed).unwrap();
+            stream.write_all(b"\r\n0\r\n\r\n").unwrap();
+        });
+        download_buffered(
+            &http,
+            &TransferBudget::new(),
+            &Ticket {
+                url,
+                cipher: Cipher::Gcm,
+            },
+            &key,
+            &path,
+        )
+        .unwrap();
+        worker.join().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), plain);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parallel_download_jobs_fetch_decrypt_and_write_real_http_bodies() {
+        let dir = temp_dir();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let key = [8u8; 32];
+        let plain = b"parallel attachment";
+        let attachments = [
+            attachment("same.txt"),
+            attachment("same.txt"),
+            attachment("same.txt"),
+            attachment("same.txt"),
+        ];
+        let sealed = crypto::encrypt_aes_v2(plain, &key).unwrap();
+        let (url, server) = serve_concurrent("200 OK", sealed, attachments.len());
+        let mut reserved = HashSet::new();
+        let jobs = attachments
+            .iter()
+            .map(|attachment| {
+                DownloadJob {
+                    attachment,
+                    ticket: Ticket {
+                        url:    url.clone(),
+                        cipher: Cipher::Gcm,
+                    },
+                    path: free_path(&dir, "same.txt", "record", &attachment.id, &mut reserved),
+                }
+            })
+            .collect::<Vec<_>>();
+        let budget = TransferBudget::new();
+        let failures = parallel_each(&jobs, |job| download_buffered(&http, &budget, &job.ticket, &key, &job.path));
+        assert!(failures.is_empty(), "{failures:?}");
+        for job in &jobs {
+            assert_eq!(std::fs::read(&job.path).unwrap(), plain);
+        }
+        let (active, peak) = server.join().unwrap();
+        assert_eq!(active, 0);
+        assert!(peak > 1 && peak <= TRANSFER_WORKERS, "peak concurrent downloads: {peak}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parallel_downloads_retain_every_independent_http_failure() {
+        let dir = temp_dir();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let attachments = [attachment("first.txt"), attachment("second.txt")];
+        let servers = [
+            serve_once("403 Forbidden", Vec::new()),
+            serve_once("503 Service Unavailable", Vec::new()),
+        ];
+        let jobs = attachments
+            .iter()
+            .zip(&servers)
+            .enumerate()
+            .map(|(index, (attachment, server))| {
+                DownloadJob {
+                    attachment,
+                    ticket: Ticket {
+                        url:    server.url.clone(),
+                        cipher: Cipher::Gcm,
+                    },
+                    path: dir.join(format!("failure-{index}.txt")),
+                }
+            })
+            .collect::<Vec<_>>();
+        let budget = TransferBudget::new();
+        let failure_key = key(8);
+        let failures = parallel_each(&jobs, |job| {
+            download_buffered(&http, &budget, &job.ticket, &failure_key, &job.path).map_err(|error| {
+                Error::Context {
+                    context: format!("downloading {}", job.attachment.name),
+                    source:  Box::new(error),
+                }
+            })
+        });
+        assert_eq!(failures.len(), 2);
+        for (server, job) in servers.into_iter().zip(&jobs) {
+            let request = server.worker.join().unwrap();
+            assert!(request.starts_with(b"GET /blob HTTP/1.1\r\n"));
+            assert!(
+                failures
+                    .iter()
+                    .any(|failure| failure.to_string().contains(&job.attachment.name))
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn download_refuses_a_target_created_after_name_selection() {
         let dir = temp_dir();
-        let path = free_path(&dir, "out.bin", "record", "file");
+        let path = free_path(&dir, "out.bin", "record", "file", &mut HashSet::new());
         let sentinel = b"keep this file";
         std::fs::write(&path, sentinel).unwrap();
         let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
@@ -1446,8 +2339,9 @@ mod tests {
         let sealed = crypto::encrypt_aes_v2(b"downloaded plaintext", &key).unwrap();
         let server = serve_once("200 OK", sealed);
         assert!(
-            download(
+            download_buffered(
                 &http,
+                &TransferBudget::new(),
                 &Ticket {
                     url:    server.url.clone(),
                     cipher: Cipher::Gcm,
@@ -1469,7 +2363,7 @@ mod tests {
 
         let dir = temp_dir();
         let target = dir.join("sentinel");
-        let path = free_path(&dir, "out.bin", "record", "file");
+        let path = free_path(&dir, "out.bin", "record", "file", &mut HashSet::new());
         let sentinel = b"keep this file";
         std::fs::write(&target, sentinel).unwrap();
         symlink(&target, &path).unwrap();
@@ -1478,8 +2372,9 @@ mod tests {
         let sealed = crypto::encrypt_aes_v2(b"downloaded plaintext", &key).unwrap();
         let server = serve_once("200 OK", sealed);
         assert!(
-            download(
+            download_buffered(
                 &http,
+                &TransferBudget::new(),
                 &Ticket {
                     url:    server.url.clone(),
                     cipher: Cipher::Gcm,
@@ -1513,7 +2408,8 @@ mod tests {
             success_status_code: 201,
             ..Default::default()
         };
-        send(&http, &target, &file).unwrap();
+        let target = prepare_upload(&file, &target).unwrap();
+        send(&http, &target).unwrap();
         let request = server.worker.join().unwrap();
         let head_end = request
             .windows(4)
@@ -1593,8 +2489,111 @@ mod tests {
             success_status_code: 201,
             ..Default::default()
         };
-        assert!(send(&http, &target, &file).is_err());
+        let target = prepare_upload(&file, &target).unwrap();
+        assert!(send(&http, &target).is_err());
         server.worker.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn upload_files_sends_every_valid_target_and_reports_each_http_failure() {
+        let dir = temp_dir();
+        let paths = [dir.join("one.txt"), dir.join("two.txt")];
+        for (path, body) in paths.iter().zip([b"one".as_slice(), b"two".as_slice()]) {
+            std::fs::write(path, body).unwrap();
+        }
+        let files = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                UploadFile {
+                    local: LocalFile::try_from(&UserPath(path.clone())).unwrap(),
+                    uid:   vec![u8::try_from(index + 1).unwrap(); 16],
+                    key:   key(u8::try_from(index + 1).unwrap()),
+                }
+            })
+            .collect::<Vec<_>>();
+        let servers = [
+            serve_once("500 Internal Server Error", Vec::new()),
+            serve_once("503 Service Unavailable", Vec::new()),
+        ];
+        let statuses = files
+            .iter()
+            .zip(&servers)
+            .map(|(file, server)| {
+                FileAddStatus {
+                    record_uid: file.uid.clone(),
+                    url: server.url.clone(),
+                    parameters: "{}".into(),
+                    success_status_code: 201,
+                    status: FileAddResult::FaSuccess as i32,
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let error = upload_files(&http, &files, &statuses).unwrap_err();
+        let Error::AttachmentBatch { failures } = error else {
+            panic!("expected aggregated upload failures");
+        };
+        assert_eq!(failures.len(), 2);
+        for (server, file) in servers.into_iter().zip(&files) {
+            let request = server.worker.join().unwrap();
+            assert!(request.starts_with(b"POST /blob HTTP/1.1\r\n"));
+            assert!(
+                failures
+                    .iter()
+                    .any(|failure| failure.to_string().contains(&file.local.name))
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn upload_run_sends_real_link_request_after_local_upload_success() {
+        let outcome = run_upload_fixture("201 Created");
+        assert!(outcome.result.is_ok());
+        assert!(outcome.vault_invalidated);
+        assert_eq!(
+            outcome.routes,
+            [
+                "/api/rest/vault/files_add".to_owned(),
+                "/api/rest/vault/records_update".to_owned()
+            ]
+        );
+        assert!(outcome.upload_request.starts_with(b"POST /blob HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn upload_run_never_sends_real_link_request_after_local_upload_failure() {
+        let outcome = run_upload_fixture("500 Internal Server Error");
+        assert!(matches!(outcome.result, Err(Error::AttachmentBatch { failures }) if failures.len() == 1));
+        assert_eq!(outcome.routes, ["/api/rest/vault/files_add"]);
+        assert!(outcome.upload_request.starts_with(b"POST /blob HTTP/1.1\r\n"));
+    }
+    #[test]
+    fn rejected_registration_does_not_send_any_file_payload() {
+        let dir = temp_dir();
+        let path = dir.join("file.txt");
+        std::fs::write(&path, b"payload").unwrap();
+        let file = UploadFile {
+            local: LocalFile::try_from(&UserPath(path)).unwrap(),
+            uid:   vec![3; 16],
+            key:   key(3),
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let target = FileAddStatus {
+            record_uid: file.uid.clone(),
+            url: format!("http://{}/blob", listener.local_addr().unwrap()),
+            parameters: "{}".into(),
+            success_status_code: 201,
+            status: 91,
+            ..Default::default()
+        };
+        let http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        let error = upload_files(&http, &[file], &[target]).unwrap_err();
+        assert!(matches!(error, Error::AttachmentBatch { failures } if failures.len() == 1));
+        assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -7,9 +7,9 @@ mod unlock;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-pub use self::folder::{Folder, FolderKind, Location};
+pub use self::folder::{Folder, FolderData, FolderKind, Location};
 pub use self::path::{PathAnchor, PathResolution, VaultPath};
-pub use self::record::{Record, RecordKind, Secrets};
+pub use self::record::{LegacyFile, Record, RecordData, RecordField, RecordKind, Secrets, TypedRecord};
 pub use self::unlock::sync_down;
 use crate::crypto::AesKey;
 use crate::uid::Uid;
@@ -277,7 +277,7 @@ pub(crate) mod tests {
                 Folder {
                     uid: uid(id),
                     name: name.into(),
-                    data: serde_json::json!({"name": name}),
+                    data: FolderData::try_from(serde_json::json!({"name": name})).unwrap(),
                     kind: FolderKind::User,
                     parent,
                     subfolders: kids.iter().map(|k| uid(k)).collect(),
@@ -300,7 +300,8 @@ pub(crate) mod tests {
             Record {
                 uid:                  uid("RRRR"),
                 kind:                 RecordKind::Typed,
-                data:                 serde_json::json!({"title": "DB Admin", "type": "login"}),
+                data:                 serde_json::from_value(serde_json::json!({"title": "DB Admin", "type": "login"}))
+                    .unwrap(),
                 revision:             1,
                 shared:               false,
                 client_modified_time: 0,
@@ -450,6 +451,7 @@ pub(crate) mod tests {
                 .folder(&shared_root)
                 .unwrap()
                 .data
+                .extra
                 .get("color")
                 .and_then(Value::as_str),
             Some("blue")
@@ -521,6 +523,64 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn malformed_typed_field_shape_fails_unlock_with_uid_context() {
+        let data_key = fixed_key(9);
+        let record_key = fixed_key(10);
+        let ring = KeyRing {
+            data_key: &data_key,
+            rsa:      None,
+            ecc:      None,
+        };
+        let record_uid = [21; 16];
+        let page = SyncDownResponse {
+            record_meta_data: vec![RecordMetaData {
+                record_uid: record_uid.to_vec(),
+                record_key: crypto::encrypt_cbc::<Pkcs7>(&record_key, &data_key).unwrap(),
+                record_key_type: RecordKeyType::EncryptedByDataKey as i32,
+                ..Default::default()
+            }],
+            records: vec![PbRecord {
+                record_uid: record_uid.to_vec(),
+                version: 3,
+                data: crypto::encrypt_aes_v2(br#"{"fields":[{"type":7}]}"#, &record_key).unwrap(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let error = open_vault(Download(vec![page]), &ring).unwrap_err();
+        assert!(matches!(context_cause(error, &record_uid, "parsing record data"), crate::Error::Json(_)));
+    }
+
+    #[test]
+    fn malformed_legacy_extra_shape_fails_unlock_with_uid_context() {
+        let data_key = fixed_key(11);
+        let record_key = fixed_key(12);
+        let ring = KeyRing {
+            data_key: &data_key,
+            rsa:      None,
+            ecc:      None,
+        };
+        let record_uid = [22; 16];
+        let page = SyncDownResponse {
+            record_meta_data: vec![RecordMetaData {
+                record_uid: record_uid.to_vec(),
+                record_key: crypto::encrypt_cbc::<Pkcs7>(&record_key, &data_key).unwrap(),
+                record_key_type: RecordKeyType::EncryptedByDataKey as i32,
+                ..Default::default()
+            }],
+            records: vec![PbRecord {
+                record_uid: record_uid.to_vec(),
+                version: 2,
+                data: crypto::encrypt_cbc::<Pkcs7>(b"{}", &record_key).unwrap(),
+                extra: crypto::encrypt_cbc::<Pkcs7>(br#"{"fields":[{"field_type":7}]}"#, &record_key).unwrap(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let error = open_vault(Download(vec![page]), &ring).unwrap_err();
+        assert!(matches!(context_cause(error, &record_uid, "parsing legacy record extra"), crate::Error::Json(_)));
+    }
+    #[test]
     fn corrupt_known_key_folder_metadata_fails_with_uid_context() {
         let data_key = fixed_key(5);
         let folder_key = fixed_key(6);
@@ -546,6 +606,30 @@ pub(crate) mod tests {
         let error = open_vault(Download(vec![page]), &ring).unwrap_err();
         assert!(matches!(context_cause(error, &folder_uid, "opening user folder metadata"), crate::Error::Crypto(_)));
     }
+
+    #[test]
+    fn malformed_known_folder_shape_fails_during_unlock_with_uid_context() {
+        let data_key = fixed_key(7);
+        let folder_key = fixed_key(8);
+        let ring = KeyRing {
+            data_key: &data_key,
+            rsa:      None,
+            ecc:      None,
+        };
+        let folder_uid = [20; 16];
+        let page = SyncDownResponse {
+            user_folders: vec![UserFolder {
+                folder_uid: folder_uid.to_vec(),
+                user_folder_key: crypto::encrypt_cbc::<Pkcs7>(&folder_key, &data_key).unwrap(),
+                key_type: RecordKeyType::EncryptedByDataKey as i32,
+                data: crypto::encrypt_cbc::<Pkcs7>(br#"{"name":7}"#, &folder_key).unwrap(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let error = open_vault(Download(vec![page]), &ring).unwrap_err();
+        assert!(matches!(context_cause(error, &folder_uid, "opening user folder metadata"), crate::Error::Json(_)));
+    }
     #[test]
     fn virtual_paths_resolve_escaped_names_and_unresolved_tails() {
         let mut vault = sample();
@@ -555,7 +639,7 @@ pub(crate) mod tests {
             Folder {
                 uid:        slash_uid.clone(),
                 name:       "/leading".into(),
-                data:       serde_json::json!({"name": "/leading"}),
+                data:       FolderData::try_from(serde_json::json!({"name": "/leading"})).unwrap(),
                 kind:       FolderKind::User,
                 parent:     Location::Root,
                 subfolders: Vec::new(),
@@ -568,7 +652,7 @@ pub(crate) mod tests {
             Folder {
                 uid:        padded_uid.clone(),
                 name:       "padded UID".into(),
-                data:       serde_json::json!({"name": "padded UID"}),
+                data:       FolderData::try_from(serde_json::json!({"name": "padded UID"})).unwrap(),
                 kind:       FolderKind::User,
                 parent:     Location::Root,
                 subfolders: Vec::new(),
@@ -697,7 +781,7 @@ pub(crate) mod tests {
             .folder(&Location::Folder(Uid::from(shared_uid.as_slice())))
             .unwrap();
         assert_eq!(shared.name, "Shared data name");
-        assert_eq!(shared.data.get("color").and_then(Value::as_str), Some("purple"));
+        assert_eq!(shared.data.extra.get("color").and_then(Value::as_str), Some("purple"));
         assert!(shared.key.is_some());
         let locked_subfolder = vault
             .folder(&Location::Folder(Uid::from(locked_sub_uid.as_slice())))

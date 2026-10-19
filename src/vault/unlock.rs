@@ -8,9 +8,8 @@ use aes::cipher::block_padding::Pkcs7;
 use p256::SecretKey;
 use prost::Message;
 use rsa::RsaPrivateKey;
-use serde_json::Value;
 
-use super::{Folder, FolderKind, Location, Record, RecordKind, SharedFolder, Team, Vault};
+use super::{Folder, FolderData, FolderKind, Location, Record, RecordKind, SharedFolder, Team, Vault};
 use crate::auth::Session;
 use crate::crypto::{self, AesKey};
 use crate::prelude::*;
@@ -161,13 +160,13 @@ pub(super) struct TeamsOpen {
 pub(super) struct SharedFoldersOpen {
     teams:              BTreeMap<Uid, Team>,
     shared_folders:     BTreeMap<Uid, SharedFolder>,
-    shared_folder_data: HashMap<Uid, Value>,
+    shared_folder_data: HashMap<Uid, FolderData>,
 }
 
 pub(super) struct RecordsKeyed {
     teams:              BTreeMap<Uid, Team>,
     shared_folders:     BTreeMap<Uid, SharedFolder>,
-    shared_folder_data: HashMap<Uid, Value>,
+    shared_folder_data: HashMap<Uid, FolderData>,
     record_keys:        HashMap<Uid, AesKey>,
     owned:              HashSet<Uid>,
 }
@@ -245,13 +244,13 @@ impl Unlock<Downloaded> {
     }
 }
 
-fn folder_data(data: &[u8], key: &AesKey) -> Result<Value> {
+fn folder_data(data: &[u8], key: &AesKey) -> Result<FolderData> {
     let plain = crypto::decrypt_cbc::<Pkcs7>(data, key)?;
     Ok(serde_json::from_slice(&plain)?)
 }
 
-fn folder_name(data: &Value) -> Option<&str> {
-    data.get("name").and_then(Value::as_str).filter(|name| !name.is_empty())
+fn folder_name(data: &FolderData) -> Option<&str> {
+    data.name.as_deref().filter(|name| !name.is_empty())
 }
 
 fn shared_folder_name(ciphertext: &[u8], key: &AesKey) -> Result<String> {
@@ -278,7 +277,7 @@ impl Unlock<TeamsOpen> {
                 continue;
             };
             let data = if sf.data.is_empty() {
-                Value::Null
+                FolderData::default()
             } else {
                 context(folder_data(&sf.data, &key), &uid, "opening shared-folder metadata")?
             };
@@ -514,7 +513,7 @@ fn unlock_records(
 fn unlock_folders(
     download: &Download,
     shared_folders: &BTreeMap<Uid, SharedFolder>,
-    shared_folder_data: &HashMap<Uid, Value>,
+    shared_folder_data: &HashMap<Uid, FolderData>,
     ring: &KeyRing,
 ) -> Result<HashMap<Uid, Folder>> {
     let user_folders = download.0.iter().flat_map(|page| &page.user_folders).map(|folder| {
@@ -529,7 +528,7 @@ fn unlock_folders(
             Some(key) if !folder.data.is_empty() => {
                 context(folder_data(&folder.data, key), &uid, "opening user folder metadata")?
             }
-            _ => Value::Null,
+            _ => FolderData::default(),
         };
         let name = folder_name(&data).unwrap_or_else(|| uid.as_ref()).to_owned();
         Ok((
@@ -552,7 +551,7 @@ fn unlock_folders(
         .map(|link| {
             let uid = Uid::from(link.shared_folder_uid.as_slice());
             let shared_folder = shared_folders.get(&uid);
-            let data = shared_folder_data.get(&uid).cloned().unwrap_or(Value::Null);
+            let data = shared_folder_data.get(&uid).cloned().unwrap_or_default();
             let name = folder_name(&data)
                 .or_else(|| shared_folder.map(|shared_folder| shared_folder.name.as_str()))
                 .unwrap_or_else(|| uid.as_ref())
@@ -592,7 +591,7 @@ fn unlock_folders(
                 Some(key) if !folder.data.is_empty() => {
                     context(folder_data(&folder.data, key), &uid, "opening shared-folder subfolder metadata")?
                 }
-                _ => Value::Null,
+                _ => FolderData::default(),
             };
             let name = folder_name(&data).unwrap_or_else(|| uid.as_ref()).to_owned();
             let parent = if folder.parent_uid.is_empty() {

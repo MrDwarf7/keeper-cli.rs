@@ -20,6 +20,40 @@ impl std::fmt::Display for ApiFailure {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum TransferAdmissionState {
+    Shared(usize),
+    Exclusive,
+}
+
+pub struct WorkerPanic(Box<dyn std::any::Any + Send>);
+
+impl std::fmt::Debug for WorkerPanic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WorkerPanic")
+    }
+}
+
+impl std::fmt::Display for WorkerPanic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("attachment transfer worker panicked")
+    }
+}
+
+impl std::error::Error for WorkerPanic {}
+
+impl From<Box<dyn std::any::Any + Send>> for WorkerPanic {
+    fn from(payload: Box<dyn std::any::Any + Send>) -> Self {
+        Self(payload)
+    }
+}
+
+impl AsRef<dyn std::any::Any + Send> for WorkerPanic {
+    fn as_ref(&self) -> &(dyn std::any::Any + Send) {
+        self.0.as_ref()
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("{context}: {source}")]
@@ -31,6 +65,18 @@ pub enum Error {
 
     #[error("attachment download failed with {} error(s)", .failures.len())]
     DownloadBatch { failures: Vec<Error> },
+    #[error("attachment transfer failed with {} error(s)", .failures.len())]
+    AttachmentBatch { failures: Vec<Error> },
+    #[error("record edit blocked by {} finding(s)", .failures.len())]
+    RecordEditFindings { failures: Vec<Error> },
+
+    #[error("attachment transfer worker panicked")]
+    WorkerPanic(#[source] WorkerPanic),
+    #[error("attachment transfer admission synchronization failed")]
+    TransferBudgetPoisoned {
+        #[source]
+        source: std::sync::PoisonError<TransferAdmissionState>,
+    },
 
     #[error("{0}")]
     Generic(String),
@@ -80,8 +126,16 @@ pub enum Error {
     #[error("unknown protocol enum value {}", .0.0)]
     UnknownEnum(#[from] prost::UnknownEnumValue),
 
+    #[error("invalid HTTP header value: {0}")]
+    HeaderValue(#[from] reqwest::header::ToStrError),
     #[error("config: {0}")]
     Config(#[from] config::ConfigError),
+
+    #[error("invalid tracing filter: {0}")]
+    TracingFilter(#[from] tracing_subscriber::filter::FromEnvError),
+
+    #[error("diagnostics initialization failed: {0}")]
+    Tracing(#[from] tracing_subscriber::util::TryInitError),
 }
 
 impl From<ApiFailure> for Error {

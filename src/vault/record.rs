@@ -1,4 +1,5 @@
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::crypto::AesKey;
 use crate::uid::Uid;
@@ -7,12 +8,15 @@ use crate::uid::Uid;
 /// records have a stored content size, so those live on their variants.
 #[derive(Debug)]
 pub enum RecordKind {
-    /// v2: `secret1`/`secret2`/`link` plus TOTP and attachments in `extra`.
-    Legacy { extra: Option<Value> },
+    Legacy {
+        extra: Option<LegacyExtra>,
+    },
     /// v3: a typed record with `fields`/`custom`.
     Typed,
     /// v4: an attachment of a typed record.
-    File { size: i64 },
+    File {
+        size: i64,
+    },
     /// v5: a Secrets Manager application.
     Application,
     /// v6: a PAM configuration, typed-record shaped.
@@ -31,12 +35,106 @@ impl From<&RecordKind> for i32 {
     }
 }
 
+/// The decrypted v2 extension envelope; unknown Commander properties remain available.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct LegacyExtra {
+    #[serde(default)]
+    pub files:  Vec<LegacyFile>,
+    #[serde(default)]
+    pub fields: Vec<LegacyField>,
+    #[serde(flatten)]
+    pub extra:  Map<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct LegacyFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id:    Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name:  Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key:   Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct LegacyField {
+    #[serde(rename = "field_type", default, skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data:       Option<Value>,
+    #[serde(flatten)]
+    pub extra:      Map<String, Value>,
+}
+
+/// Decrypted record JSON with known top-level and field shapes checked at sync.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct RecordData {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title:     String,
+    #[serde(rename = "type", default, skip_serializing_if = "String::is_empty")]
+    pub type_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes:     String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name:      Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret1:   Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret2:   Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link:      Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size:      Option<u64>,
+    #[serde(default)]
+    pub fields:    Vec<RecordField>,
+    #[serde(default)]
+    pub custom:    Vec<RecordField>,
+    #[serde(flatten)]
+    pub extra:     Map<String, Value>,
+}
+
+/// The field envelope is concrete while `value` and extension properties stay open Commander JSON.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct RecordField {
+    #[serde(rename = "type", default = "default_field_type")]
+    pub ty:             String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label:          Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value:          Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name:           Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required:       bool,
+    #[serde(rename = "privacyScreen", default, skip_serializing_if = "Option::is_none")]
+    pub privacy_screen: Option<bool>,
+    #[serde(flatten)]
+    pub extra:          Map<String, Value>,
+}
+impl RecordField {
+    pub fn values(&self) -> impl Iterator<Item = &Value> + Clone {
+        self.value.iter().flat_map(|value| {
+            match value {
+                Value::Array(values) => values.as_slice(),
+                value => std::slice::from_ref(value),
+            }
+        })
+    }
+}
+
+fn default_field_type() -> String {
+    "text".to_owned()
+}
+
 #[derive(Debug)]
 pub struct Record {
     pub uid:                  Uid,
     pub kind:                 RecordKind,
-    /// The decrypted record JSON.
-    pub data:                 Value,
+    pub data:                 RecordData,
     pub revision:             i64,
     pub shared:               bool,
     pub client_modified_time: i64,
@@ -45,6 +143,28 @@ pub struct Record {
     pub owner:                bool,
     /// Unencrypted server-side record data, e.g. the `file_ids` of a typed record's attachments.
     pub udata:                Option<Value>,
+}
+
+/// A v3 typed record validated for operations that require that record version.
+#[derive(Clone, Copy, Debug)]
+pub struct TypedRecord<'a>(&'a Record);
+
+impl<'a> TryFrom<&'a Record> for TypedRecord<'a> {
+    type Error = crate::Error;
+
+    fn try_from(record: &'a Record) -> crate::Result<Self> {
+        if matches!(&record.kind, RecordKind::Typed) {
+            Ok(Self(record))
+        } else {
+            Err(crate::Error::Generic(format!("Record {} is not a supported v3 typed record", record.uid)))
+        }
+    }
+}
+
+impl AsRef<Record> for TypedRecord<'_> {
+    fn as_ref(&self) -> &Record {
+        self.0
+    }
 }
 
 /// Whether hidden field values are printed.
@@ -68,7 +188,17 @@ pub struct DisplayField<'a> {
 
 impl Record {
     fn str_field(&self, key: &str) -> Option<&str> {
-        self.data.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
+        let value = match key {
+            "title" => Some(self.data.title.as_str()),
+            "type" => Some(self.data.type_name.as_str()),
+            "notes" => Some(self.data.notes.as_str()),
+            "name" => self.data.name.as_deref(),
+            "secret1" => self.data.secret1.as_deref(),
+            "secret2" => self.data.secret2.as_deref(),
+            "link" => self.data.link.as_deref(),
+            _ => self.data.extra.get(key).and_then(Value::as_str),
+        };
+        value.filter(|s| !s.is_empty())
     }
 
     pub fn title(&self) -> &str {
@@ -88,13 +218,8 @@ impl Record {
         self.str_field("notes").unwrap_or_default()
     }
 
-    /// Typed fields (`fields` then `custom`).
     pub fn typed_fields(&self) -> impl Iterator<Item = TypedField<'_>> {
-        ["fields", "custom"]
-            .into_iter()
-            .filter_map(|k| self.data.get(k).and_then(Value::as_array))
-            .flatten()
-            .map(TypedField)
+        self.data.fields.iter().chain(&self.data.custom).map(TypedField)
     }
 
     /// First non-empty value among fields of the given types, in `fields` then `custom` order.
@@ -131,12 +256,10 @@ impl Record {
             RecordKind::Legacy { extra } => {
                 extra
                     .as_ref()
-                    .and_then(|extra| extra.get("fields"))
-                    .and_then(Value::as_array)
                     .into_iter()
-                    .flatten()
-                    .filter(|field| field.get("field_type").and_then(Value::as_str) == Some("totp"))
-                    .filter_map(|field| field.get("data").and_then(Value::as_str))
+                    .flat_map(|extra| &extra.fields)
+                    .filter(|field| field.field_type.as_deref() == Some("totp"))
+                    .filter_map(|field| field.data.as_ref()?.as_str())
                     .find(|value| !value.is_empty())
                     .or_else(|| self.typed_value(&["oneTimeCode", "otp"]).and_then(Value::as_str))
             }
@@ -205,22 +328,16 @@ impl Record {
         };
         match &self.kind {
             RecordKind::Legacy { .. } => {
-                let custom = self
-                    .data
-                    .get("custom")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|field| {
-                        let value = field
-                            .get("value")
-                            .and_then(Value::as_str)
-                            .filter(|value| !value.is_empty())?;
-                        Some(DisplayField {
-                            label: field.get("name").and_then(Value::as_str).unwrap_or_default().into(),
-                            value: secret_value(value),
-                        })
-                    });
+                let custom = self.data.custom.iter().filter_map(|field| {
+                    let Some(Value::String(value)) = field.value.as_ref() else {
+                        return None;
+                    };
+                    let value = (!value.is_empty()).then_some(value.as_str())?;
+                    Some(DisplayField {
+                        label: field.name.as_deref().unwrap_or_default().into(),
+                        value: secret_value(value),
+                    })
+                });
                 [
                     ("Login", self.login().map(std::borrow::Cow::from)),
                     ("Password", self.password().map(secret_value)),
@@ -243,13 +360,7 @@ impl Record {
                 [
                     ("Name", self.str_field("name").map(std::borrow::Cow::from)),
                     ("MIME Type", self.str_field("type").map(std::borrow::Cow::from)),
-                    (
-                        "Size",
-                        self.data
-                            .get("size")
-                            .and_then(Value::as_u64)
-                            .map(|size| format!("{size} bytes").into()),
-                    ),
+                    ("Size", self.data.size.map(|size| format!("{size} bytes").into())),
                 ]
                 .into_iter()
                 .filter_map(|(label, value)| {
@@ -272,15 +383,10 @@ impl Record {
                         } else if values.peek().is_none() {
                             match first {
                                 Value::String(value) => value.as_str().into(),
-                                value => render_value(value).into(),
+                                value => RenderValue(value).to_string().into(),
                             }
                         } else {
-                            std::iter::once(first)
-                                .chain(values)
-                                .map(render_value)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                                .into()
+                            RenderValues(std::iter::once(first).chain(values)).to_string().into()
                         };
                         Some(DisplayField {
                             label: field.label(),
@@ -310,24 +416,19 @@ impl Record {
     }
 }
 
-pub struct TypedField<'a>(&'a Value);
+pub struct TypedField<'a>(&'a RecordField);
 
 impl<'a> TypedField<'a> {
     pub fn field_type(&self) -> &'a str {
-        self.0.get("type").and_then(Value::as_str).unwrap_or("text")
+        self.0.ty.as_str()
     }
 
-    pub fn values(&self) -> impl Iterator<Item = &'a Value> + use<'a> {
-        self.0.get("value").into_iter().flat_map(|value| {
-            match value {
-                Value::Array(values) => values.as_slice(),
-                value => std::slice::from_ref(value),
-            }
-        })
+    pub fn values(&self) -> impl Iterator<Item = &'a Value> + Clone + use<'a> {
+        self.0.values()
     }
 
     pub fn label(&self) -> std::borrow::Cow<'a, str> {
-        match self.0.get("label").and_then(Value::as_str).filter(|l| !l.is_empty()) {
+        match self.0.label.as_deref().filter(|label| !label.is_empty()) {
             Some(label) => label.into(),
             None => FieldTypeLabel(self.field_type()).to_string().into(),
         }
@@ -348,7 +449,7 @@ impl<'a> TypedField<'a> {
                 | "bankAccount"
                 | "note"
                 | "json"
-        ) || self.0.get("privacyScreen").and_then(Value::as_bool).unwrap_or(false)
+        ) || self.0.privacy_screen == Some(true)
     }
 }
 
@@ -376,22 +477,45 @@ impl std::fmt::Display for FieldTypeLabel<'_> {
     }
 }
 
-/// Typed-field values are strings, numbers (dates as epoch millis) or small objects
-/// (`name`, `phone`, `host`, ...); objects render as `key: value` pairs.
-fn render_value(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Null => String::new(),
-        Value::Object(map) => {
-            map.iter()
-                .filter_map(|(k, v)| {
-                    let s = render_value(v);
-                    (!s.is_empty()).then(|| format!("{k}: {s}"))
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
+/// Displays Commander field values directly into the final formatter.
+struct RenderValue<'a>(&'a Value);
+
+impl std::fmt::Display for RenderValue<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Value::String(value) => f.write_str(value),
+            Value::Null => Ok(()),
+            Value::Object(map) => {
+                let mut entries = map.iter().filter(|(_, value)| !render_value_is_empty(value)).peekable();
+                while let Some((key, value)) = entries.next() {
+                    if entries.peek().is_some() {
+                        write!(f, "{key}: {}, ", RenderValue(value))?;
+                    } else {
+                        write!(f, "{key}: {}", RenderValue(value))?;
+                    }
+                }
+                Ok(())
+            }
+            other => write!(f, "{other}"),
         }
-        other => other.to_string(),
+    }
+}
+struct RenderValues<'a, I>(I)
+where
+    I: Iterator<Item = &'a Value> + Clone;
+
+impl<'a, I> std::fmt::Display for RenderValues<'a, I>
+where
+    I: Iterator<Item = &'a Value> + Clone,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, value) in self.0.clone().enumerate() {
+            if index != 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", RenderValue(value))?;
+        }
+        Ok(())
     }
 }
 
@@ -413,7 +537,7 @@ mod tests {
         Record {
             uid: Uid::from([1u8; 16].as_slice()),
             kind,
-            data,
+            data: serde_json::from_value(data).unwrap(),
             revision: 0,
             shared: false,
             client_modified_time: 0,
@@ -424,13 +548,81 @@ mod tests {
     }
 
     #[test]
+    fn record_payload_validates_known_shapes_and_round_trips_extensions() {
+        let raw = serde_json::json!({
+            "title": "Example",
+            "fields": [{"type": "text", "value": {"open": [1, null]}, "futureField": "kept"}],
+            "future": {"kept": true}
+        });
+        let data: RecordData = serde_json::from_value(raw.clone()).unwrap();
+        let encoded = serde_json::to_value(data).unwrap();
+        assert_eq!(encoded.get("future"), raw.get("future"));
+        let Some(fields) = encoded.get("fields").and_then(Value::as_array) else {
+            panic!("record fields must serialize as an array");
+        };
+        assert_eq!(fields, &[serde_json::json!({"type": "text", "value": {"open": [1, null]}, "futureField": "kept"})]);
+        assert!(serde_json::from_value::<RecordData>(serde_json::json!({"fields": {}})).is_err());
+        assert!(serde_json::from_value::<RecordData>(serde_json::json!({"fields": [{"type": 7}]})).is_err());
+        assert!(serde_json::from_value::<RecordData>(serde_json::json!({"size": "large"})).is_err());
+        assert!(
+            serde_json::from_value::<RecordData>(serde_json::json!({"fields": [{"privacyScreen": "yes"}]})).is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_custom_fields_keep_string_value_semantics() {
+        let record = record(
+            RecordKind::Legacy { extra: None },
+            serde_json::json!({"custom": [
+                {"name": "PIN", "value": "1234"},
+                {"name": "List", "value": ["not", "a", "legacy string"]}
+            ]}),
+        );
+        let fields = record.display_fields(Secrets::Revealed);
+        assert_eq!(fields.iter().map(|field| field.value.as_ref()).collect::<Vec<_>>(), ["1234"]);
+    }
+
+    #[test]
+    fn typed_record_conversion_rejects_unsupported_versions() {
+        let typed = record(RecordKind::Typed, serde_json::json!({"type": "login"}));
+        assert!(TypedRecord::try_from(&typed).is_ok());
+
+        for kind in [
+            RecordKind::Legacy { extra: None },
+            RecordKind::File { size: 1 },
+            RecordKind::Application,
+            RecordKind::PamConfiguration,
+        ] {
+            let unsupported = record(kind, serde_json::json!({}));
+            assert!(TypedRecord::try_from(&unsupported).is_err());
+        }
+    }
+
+    #[test]
+    fn object_and_array_values_keep_commander_rendering() {
+        let record = record(
+            RecordKind::Typed,
+            serde_json::json!({"fields": [
+                {"type": "name", "value": {"first": "Ada", "middle": null, "last": "Lovelace", "empty": ""}},
+                {"type": "text", "value": ["first", null, {"value": "second"}]}
+            ]}),
+        );
+        let fields = record.display_fields(Secrets::Revealed);
+        assert_eq!(fields.first().map(|field| field.value.as_ref()), Some("first: Ada, last: Lovelace"));
+        assert_eq!(fields.get(1).map(|field| field.value.as_ref()), Some("first, value: second"));
+    }
+
+    #[test]
     fn legacy_record_fields_and_totp_come_from_data_and_extra() {
         let r = record(
             RecordKind::Legacy {
-                extra: Some(serde_json::json!({"fields": [
-                    {"field_type": "totp", "data": ""},
-                    {"field_type": "totp", "data": "otpauth://totp/x?secret=AAAA"}
-                ]})),
+                extra: Some(
+                    serde_json::from_value(serde_json::json!({"fields": [
+                        {"field_type": "totp", "data": ""},
+                        {"field_type": "totp", "data": "otpauth://totp/x?secret=AAAA"}
+                    ]}))
+                    .unwrap(),
+                ),
             },
             serde_json::json!({"title": "Old", "secret1": "bob", "secret2": "pw", "link": "https://x", "custom": [{"name": "PIN", "value": "1234"}]}),
         );

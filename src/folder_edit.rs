@@ -16,6 +16,8 @@ use crate::commands::{App, Run};
 use crate::crypto::{self, AesKey};
 use crate::prelude::*;
 use crate::uid::Uid;
+#[cfg(test)]
+use crate::vault::FolderData;
 use crate::vault::{Folder, FolderKind, Location, PathResolution, Record, Vault};
 
 /// Commander puts at most this many items in one `move` and asks for the command to be repeated.
@@ -151,11 +153,10 @@ impl Run for Mkdir {
         };
         let tint = Tint::from(color);
         {
-            app.ensure_synced()?;
-            let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-            let session = &mut account.session;
-            let cwd = &account.cwd;
+            let view = app.view()?;
+            let vault = view.vault;
+            let session = &mut *view.session;
+            let cwd = view.cwd;
             let (parent, mut name) = match folder.as_deref().filter(|f| !f.trim().is_empty()) {
                 None => (None, String::new()),
                 Some(path) => {
@@ -232,11 +233,10 @@ impl Run for Rmdir {
             _ => Report::Show,
         };
         {
-            app.ensure_synced()?;
-            let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-            let session = &mut account.session;
-            let cwd = &account.cwd;
+            let view = app.view()?;
+            let vault = view.vault;
+            let session = &mut *view.session;
+            let cwd = view.cwd;
             let mut doomed: Vec<&Folder> = Vec::new();
             for pattern in &pattern {
                 let found: Vec<&Folder> = match locate(vault, cwd, pattern) {
@@ -326,11 +326,10 @@ impl Run for Rndir {
             false => Report::Show,
         };
         {
-            app.ensure_synced()?;
-            let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-            let session = &mut account.session;
-            let cwd = &account.cwd;
+            let view = app.view()?;
+            let vault = view.vault;
+            let session = &mut *view.session;
+            let cwd = view.cwd;
             let uid = match locate(vault, cwd, &path) {
                 Target::Folder(Location::Folder(uid)) => uid,
                 Target::Folder(Location::Root) => {
@@ -371,11 +370,10 @@ impl Run for Mv {
             (false, false) => Match::Records,
         };
         {
-            app.ensure_synced()?;
-            let account = app.account.as_mut().ok_or(Error::NotLoggedIn)?;
-            let vault = account.vault.as_ref().ok_or(Error::NotLoggedIn)?;
-            let session = &mut account.session;
-            let cwd = &account.cwd;
+            let view = app.view()?;
+            let vault = view.vault;
+            let session = &mut *view.session;
+            let cwd = view.cwd;
             let dst = Location::try_from(vault.resolve_path(cwd, &dst))
                 .map_err(|_| Error::Generic("mv: Destination path should be existing folder".into()))?;
             let mut sources = selected(vault, cwd, &src, &dst, matching)?;
@@ -665,7 +663,10 @@ impl TryFrom<(&Folder, &Edit)> for Request {
         let key = folder.key.as_ref().ok_or_else(|| {
             Error::Generic(format!("The key of folder {} is not available, so it cannot be changed", folder.uid))
         })?;
-        let mut data = folder.data.as_object().cloned().unwrap_or_default();
+        let mut data = folder.data.extra.clone();
+        if let Some(name) = &folder.data.name {
+            data.insert("name".to_owned(), serde_json::json!(name));
+        }
         if let Rename::To(name) = &edit.name {
             data.insert("name".to_owned(), serde_json::json!(name));
         }
@@ -1249,17 +1250,17 @@ mod tests {
                 panic!("fixture is missing key P")
             };
             p_folder.key = Some(p_key.clone());
-            p_folder.data = json!({ "name": "Personal", "color": "red" });
+            p_folder.data = FolderData::try_from(json!({ "name": "Personal", "color": "red" })).unwrap();
             let q_folder = vault.folders.get_mut(&q).unwrap();
             q_folder.name = "Sub".into();
             let Some(q_key) = keys.get("Q") else {
                 panic!("fixture is missing key Q")
             };
             q_folder.key = Some(q_key.clone());
-            q_folder.data = json!({ "name": "Sub" });
+            q_folder.data = FolderData::try_from(json!({ "name": "Sub" })).unwrap();
             let record = vault.records.get_mut(&r3).unwrap();
             record.kind = RecordKind::Typed;
-            record.data = json!({ "title": "Router", "type": "login" });
+            record.data = serde_json::from_value(json!({ "title": "Router", "type": "login" })).unwrap();
             let Some(r3_key) = keys.get("R3") else {
                 panic!("fixture is missing key R3")
             };
@@ -1270,7 +1271,7 @@ mod tests {
                 Record {
                     uid:                  r2,
                     kind:                 RecordKind::Legacy { extra: None },
-                    data:                 json!({ "title": "router old" }),
+                    data:                 serde_json::from_value(json!({ "title": "router old" })).unwrap(),
                     revision:             1,
                     shared:               false,
                     client_modified_time: 0,
@@ -1296,7 +1297,7 @@ mod tests {
                             Some(key) => key.clone(),
                             None => panic!("fixture is missing key {key}"),
                         }),
-                        data: json!({ "name": name }),
+                        data: FolderData::try_from(json!({ "name": name })).unwrap(),
                     },
                 )
             };
@@ -1580,7 +1581,7 @@ mod tests {
             parent:     Location::Root,
             subfolders: Vec::new(),
             key:        None,
-            data:       Value::Null,
+            data:       FolderData::default(),
         };
         assert!(
             Request::try_from((

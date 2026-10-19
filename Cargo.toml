@@ -70,14 +70,8 @@ thiserror = "*"
 # tokio = { version = "*", features = ["full", "tracing"] }
 
 # Logging and tracing
-# tracing = "*"
-# tracing-subscriber = { version = "*", features = [
-#     "ansi",
-#     "chrono",
-#     "env-filter",
-#     "serde",
-#     "std",
-# ] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = [ "env-filter", "fmt" ] }
 
 
 # Extra stuff
