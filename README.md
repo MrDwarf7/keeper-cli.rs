@@ -1,4 +1,25 @@
-# keeper-cli
+<!-- rumdl-disable MD033 -->
+<h1 align="center">keeper-cli</h1>
+
+<div align="center">
+
+**Keeper Commander's core, rebuilt in Rust: a command-line client for Keeper Password Manager.**
+
+![Rust](https://img.shields.io/badge/Rust-nightly-000000?style=for-the-badge&logo=rust&logoColor=white)
+![edition](https://img.shields.io/badge/edition-2024-5e5e5e?style=for-the-badge)
+![license](https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge)
+![tests](https://img.shields.io/badge/tests-120_passing-22c55e?style=for-the-badge)
+![live account](https://img.shields.io/badge/live_account-untested-f59e0b?style=for-the-badge)
+
+</div>
+<!-- rumdl-enable MD033 -->
+
+---
+
+> [!NOTE]
+> This unofficial project is not affiliated with or endorsed by Keeper Security.
+> It uses the same endpoints as Keeper's clients, which can change. Live-account
+> behavior has not yet been verified.
 
 keeper-cli is a Rust command-line client for Keeper, based on the core of
 [Keeper Commander](https://github.com/Keeper-Security/Commander). It logs in,
