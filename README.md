@@ -99,9 +99,11 @@ when possible.
 
 Release builds use concise error output by default. Add `--debug` to show
 contextual cause chains, including each failure in a partial attachment
-download. Debug builds enable those diagnostics automatically. HTTP URL
-credentials, query strings, fragments, and API supplemental data are omitted
-from reports.
+download. Debug builds enable those diagnostics automatically. Project tracing
+events go to stderr; `RUST_LOG` overrides the release default, and an invalid
+filter is reported. HTTP URL credentials, query strings, fragments, and API
+supplemental data are omitted from reports. JSON payload errors retain their
+original source internally but report only the error category and location.
 
 ## Configuration
 
@@ -122,8 +124,17 @@ Record and folder changes, attachment transfer, and clipboard/password commands
 are implemented. The vault sync is a full download each time; it does not use
 incremental history.
 
-Downloads never overwrite existing files. A failed disk write can leave a
-partial new file; the command reports the failure.
+Downloads reserve filenames without overwriting existing files. GCM
+authentication is checked before output is written. Legacy CBC downloads have
+no message authentication; they are checked only for valid PKCS#7 padding. A
+failed disk write can still leave a partial new file, and the command reports
+the failure.
+
+Attachment transfers use four blocking workers and an estimated shared-buffer
+admission budget of 64 MiB. Unknown or oversized file sizes run alone. One file
+can still exceed that budget because it is fully buffered; this is not a hard
+process-memory limit. Upload files are linked to the record only after every
+upload succeeds.
 
 These features are not implemented:
 
@@ -138,9 +149,12 @@ These features are not implemented:
 
 ## Verification status
 
-No authenticated live Keeper account was supplied for this project. Tests and
-local HTTP fixtures are available for protocol and command behavior, but
-production vault operations have not been verified against a real account.
+Local tests and HTTP fixtures provide protocol and command-behavior coverage.
+They have exercised encrypted sync payloads, unknown-property round-tripping,
+masked and revealed field values, and attachment upload success and failure
+without linking on failure. Authenticated live Keeper login, 2FA, persistence,
+vault writes, folder and attachment operations, clipboard behavior, and TOTP
+acceptance remain unverified.
 
 ## Regenerating protobuf descriptors
 
@@ -159,22 +173,32 @@ to include them.
 
 ## Development
 
-Install the development tools with [mise](https://mise.jdx.dev/):
+Install and activate the development tools with [mise](https://mise.jdx.dev/):
 
 ```bash
-mise install
+mise trust && mise install && mise reshim
 ```
 
-Rust is managed by rustup through `rust-toolchain.toml`. Run the existing
-`cargo make` aliases from the repository root:
+Rust is managed by rustup through `rust-toolchain.toml`. Mise wraps `cargo`
+with `mbx`; cargo-make tasks use `CARGO_CMD=mbx` because cargo-make removes the
+mise Cargo wrapper from `PATH`. `RUSTC_WRAPPER` stays disabled so mbx remains
+the Rust compiler wrapper. Set `CARGO_CMD=cargo` to opt out. The project
+`.mbx.toml` keeps the system linker as the default on every platform.
+
+Run the existing `cargo make` aliases from the repository root. `f` formats
+Rust, TOML, and Markdown; `ci-*` tasks check without formatting source files:
 
 ```bash
+cargo make f
+cargo make ci-format
+cargo make ci-markdown
+cargo make ci-check
 cargo make A
 cargo make r -- --help
 ```
 
-If mise is not activated in your shell, prefix these commands with
-`mise exec --`.
+To bypass mbx for one task, use `CARGO_CMD=cargo cargo make <task>`. If mise is
+not activated in your shell, prefix commands with `mise exec --`.
 
 Clippy denies panic-prone collection indexing and direct string slicing. Use
 fixed-size data, destructuring, iterators, and checked collection APIs instead.

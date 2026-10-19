@@ -14,6 +14,12 @@ shell.
 The authenticated account owns its session, cached vault, and current folder as
 one unit, so switching accounts cannot reuse another account's local state.
 
+Decrypted record and folder envelopes validate known shapes while retaining
+unknown properties. Field values remain arbitrary JSON, and failures keep
+context. A borrowed `TypedRecord` validates a v3 upload or link once; the
+existing view carries the session, vault, and current folder. Record display
+recurses through values without intermediate joined strings.
+
 Missing key material leaves inaccessible entries locked or unavailable. A failed
 decrypt or parse after key resolution is a sync error, not missing data. Errors
 retain their sources until the CLI renders them: concise output in release
@@ -34,6 +40,13 @@ key. `From<LocalFile>` binds them once; `TryFrom<&UploadFile>` seals the
 contents with that same key. Registration, transfer, and record linking use
 those values directly, so file-to-key pairing cannot drift between parallel
 collections.
+
+Attachment transfers use four blocking workers and an estimated 64 MiB shared
+buffer-admission budget. Unknown or oversized files run alone, but an individual
+file is still fully buffered and can exceed the budget. All uploads must succeed
+before the record is linked. Downloads reserve filenames without overwriting
+existing files and verify GCM authentication before writing output. Legacy CBC
+downloads have no message authentication; only PKCS#7 padding is checked.
 
 Table columns and rows share a const-generic width, so ragged rows cannot be
 inserted. Fixed byte layouts use destructuring or checked splits; dynamic
@@ -90,9 +103,12 @@ through shell history or process listings.
 
 ## Verification status
 
-No authenticated live Keeper account was supplied. Tests and local HTTP fixtures
-are available for protocol and command behavior, but production vault operations
-have not been verified against a real account.
+Local tests and HTTP fixtures provide protocol and command-behavior coverage,
+including encrypted local sync payloads, unknown-property round-tripping,
+masked and revealed field values, and attachment upload success or failure
+without linking on failure. Authenticated live Keeper login, 2FA, persistence,
+vault writes, folder and attachment operations, clipboard behavior, and TOTP
+acceptance remain unverified.
 
 The implementation aims to meet these local and live acceptance criteria:
 

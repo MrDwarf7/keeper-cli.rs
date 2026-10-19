@@ -12,7 +12,7 @@ or bypass their dependencies with direct Cargo commands.
 
 | Work                                      | Command                            |
 | ----------------------------------------- | ---------------------------------- |
-| Format Rust and TOML                      | `cargo make f`                     |
+| Format Rust, TOML, and Markdown           | `cargo make f`                     |
 | Check all targets                         | `cargo make c`                     |
 | Run Clippy                                | `cargo make cp`                    |
 | Run tests                                 | `cargo make t`                     |
@@ -27,9 +27,30 @@ or bypass their dependencies with direct Cargo commands.
 | Run the full verification sweep           | `cargo make A`                     |
 | Clean build artifacts                     | `cargo make cl`                    |
 
-`A` and `a` are different tasks. `A` runs formatting, checks, Clippy, and the
-build-and-test sweep. Formatting tasks modify files, including TOML files.
-Account for that when other agents are working in the same checkout.
+Mise wraps `cargo` with `mbx`; cargo-make tasks use `CARGO_CMD=mbx` because
+cargo-make removes mise's Cargo wrapper from `PATH`. Set `CARGO_CMD=cargo` to
+opt out.
+
+The `ci-*` tasks are non-mutating:
+
+| Check                    | Command                         |
+| ------------------------ | ------------------------------- |
+| Rust and TOML formatting | `cargo make ci-format`          |
+| Markdown lint            | `cargo make ci-markdown`        |
+| Cargo check              | `cargo make ci-check`           |
+| Clippy warnings          | `cargo make ci-clippy`          |
+| Pedantic Clippy          | `cargo make ci-clippy-pedantic` |
+| Tests                    | `cargo make ci-test`            |
+| Documentation            | `cargo make ci-doc`             |
+| Release build            | `cargo make ci-build-release`   |
+
+`cargo make ci-format` and the check tasks do not modify source files. Local
+`cargo make f` formats Rust, TOML, and Markdown; avoid running it while others
+edit the same files.
+
+`A` and `a` are different tasks. `A` runs formatting, Markdown lint, checks,
+Clippy, and the build-and-test sweep. Formatting tasks modify files, including
+TOML files. Account for that when other agents are working in the same checkout.
 
 The test tasks forward arguments through `${@}`. Prefer that mechanism for
 targeted tests too:
@@ -163,6 +184,20 @@ user's explicit authorization for those side effects.
   agent's files mid-edit. Run the repository-wide tasks after integration.
 - Local commit permission does not authorize pushes, PR creation, tags, or
   publication. Those still require explicit user approval.
+
+### Parallel jj handoff
+
+For parallel jj work, load `skill://swarm-jj-handoff` alongside
+`skill://agent-swarms`. If the session's catalog is stale, read
+`~/.omp/agent/managed-skills/swarm-jj-handoff/SKILL.md` directly.
+
+The integration owner must remove task-owned workspaces and revisions proven
+fully integrated or redundant, including both jj workspace records and their
+on-disk directories. This requirement supersedes the generic instruction to
+retain workspaces after a swarm. Preserve user-owned and unresolved work; never
+filter away divergence to claim a clean graph. Before handoff, verify the
+default log, status, workspace list, and full visible mutable graph. Leave
+coherent, described changes and an empty default working copy.
 
 ## Repository metadata and license
 
