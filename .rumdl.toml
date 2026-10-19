@@ -1,0 +1,13 @@
+[MD013]
+line-length = 100
+reflow = true
+
+[MD041]
+enabled = false
+
+[MD060]
+enabled = true
+style = "aligned"
+
+[per-file-ignores]
+".github/PULL_REQUEST_TEMPLATE.md" = ["MD033"]

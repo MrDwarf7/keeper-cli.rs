@@ -78,34 +78,34 @@ echo "BREAKER: ${BREAKER}"
 # cargo-make#envs (global) docs:
 #   https://github.com/sagiegurari/cargo-make#global
 env.RUSTUP_TOOLCHAIN = "nightly"
-command = "cargo"
-args = ["fmt", "--", "--emit=files"]
-dependencies = ["_taplo_format"]
+command = "${CARGO_CMD}"
+args = ["fmt", "--all", "--", "--emit=files"]
+dependencies = ["_taplo_format", "_rumdl_format"]
 
 [tasks.clean]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["clean"]
 
 [tasks.build]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["${BUILD_ARG}", "${@}"]
 dependencies = ["format"]
 
 [tasks.build_release]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["${BUILD_ARG}", "--release", "${@}"]
 dependencies = ["format"]
 
 [tasks.docs]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["doc", "--no-deps", "${@}"]
 
 [tasks.check]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["check", "--all-targets", "--color", "always", "${@}"]
 
 [tasks.clippy]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = [
   "clippy",
   "--all-targets",
@@ -117,38 +117,103 @@ args = [
 ]
 # END Core bare. min
 
+[tasks.ci-format]
+env.RUSTUP_TOOLCHAIN = "nightly"
+command = "${CARGO_CMD}"
+args = ["fmt", "--all", "--check"]
+dependencies = ["ci-taplo-format"]
+
+[tasks.ci-taplo-format]
+command = "taplo"
+args = ["format", "--check"]
+
+[tasks.ci-markdown]
+command = "rumdl"
+args = ["check", "--respect-gitignore", "."]
+
+[tasks.ci-check]
+command = "${CARGO_CMD}"
+args = ["check", "--all-targets", "--locked", "${@}"]
+
+[tasks.ci-clippy]
+command = "${CARGO_CMD}"
+args = [
+  "clippy",
+  "--all-targets",
+  "--all-features",
+  "--locked",
+  "${@}",
+  "--",
+  "-D",
+  "warnings",
+]
+
+[tasks.ci-clippy-pedantic]
+command = "${CARGO_CMD}"
+args = [
+  "clippy",
+  "--all-targets",
+  "--all-features",
+  "--locked",
+  "${@}",
+  "--",
+  "-W",
+  "clippy::pedantic",
+]
+
+[tasks.ci-test]
+command = "${CARGO_CMD}"
+args = ["test", "--all", "--locked", "${@}"]
+
+[tasks.ci-doc]
+env.RUSTDOCFLAGS = "-D warnings"
+command = "${CARGO_CMD}"
+args = [
+  "doc",
+  "--no-deps",
+  "--all-features",
+  "--all",
+  "--locked",
+  "--document-private-items",
+  "${@}",
+]
+
+[tasks.ci-build-release]
+command = "${CARGO_CMD}"
+args = ["build", "--release", "--locked", "${@}"]
+
 # START Tests
 [tasks.test]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["test", "${@}"]
 
 [tasks.test_all]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["test", "--all", "${@}"]
 
 [tasks.test_no_capture]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["test", "${@}", "--", "--nocapture"]
 
 [tasks.test_all_no_capture]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["test", "--all", "${@}", "--", "--nocapture"]
 # END Tests
 
 # START Function outputs
 # Build dependencies also receive ${@}; cargo run already builds its target.
 [tasks.run]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["run", "${@}"]
 dependencies = ["format"]
 
 [tasks.run_release]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["run", "--release", "${@}"]
 dependencies = ["format"]
 
 [tasks.run_as_project]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["run", " --bin", "${PROJECT_NAME}", "${@}"]
 dependencies = [
   "build_workspace",
@@ -161,17 +226,17 @@ dependencies = [
 
 # START Workspaces
 [tasks.build_workspace]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["${BUILD_ARG}", "--workspace", "${@}"]
 dependencies = ["format"]
 
 [tasks.build_release_workspace]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["${BUILD_ARG}", "--release", "--workspace", "${@}"]
 dependencies = ["format"]
 
 [tasks.test_workspace]
-command = "cargo"
+command = "${CARGO_CMD}"
 args = ["test", "--workspace", "${@}"]
 # END Workspaces
 
@@ -200,4 +265,9 @@ command = "taplo"
 args = ["format", "--force"]
 # END Taplo (TOML Formmater) tasks
 
+
+[tasks._rumdl_format]
+private = true
+command = "rumdl"
+args = ["fmt", "--respect-gitignore", "."]
 ## END Misc tasks

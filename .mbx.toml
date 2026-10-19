@@ -1,0 +1,9 @@
+incremental = false
+eager_incremental = false
+share_out_dir = true
+share_workspace_root = false
+build_script_execution = true
+cc = true
+
+[linker]
+default = "system"

@@ -7,7 +7,20 @@ min_version = "2026.8.16"
 mr-boxington = "latest"
 taplo = "latest"
 "cargo:cargo-make" = { version = "latest", locked = true }
+git-cliff = "latest"
+"cargo:cargo-edit" = "latest"
+"cargo:cargo-watch" = "latest"
+typst = "latest"
+"cargo:rumdl" = "latest"
 
 [env]
 # mbx is the compiler cache; a second rustc wrapper would bypass it.
 RUSTC_WRAPPER = false
+
+[settings]
+minimum_release_age = "24h"
+cargo.binstall = true
+cargo.binstall_quickinstall = true
+
+[wrappers]
+cargo = { command = "mbx", env = { MBX_CARGO_SHIM_MODE = "1" } }

@@ -8,16 +8,17 @@ extend = [
 ]
 
 [env]
+CARGO_CMD = { value = "mbx", condition = { env_not_set = ["CARGO_CMD"] } }
+
 ROOT = "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}"
 SCRIPT_DIR = "${ROOT}/scripts"
 TOOL_DIR = "${ROOT}/tools"
 
-# Name of output if/when calling dist tasks, should match the cargo bin output
-PROJECT_NAME = "keeper-cli" # "cargo_output_binary_name_for_PROJECT_NAME"
+PROJECT_NAME = "keeper-cli"
 # Default profile to use for builds during dist related tasks
 SLEEP_TIME = "15"
 
-# GitHub / repo metadata (set by setup.sh during template init)
+# Repository metadata
 GITHUB_USER = "mrdwarf7"
 REPO_NAME = "keeper-cli.rs"                              # GitHub repo name (with .rs)
 GITHUB_URL = "https://github.com/mrdwarf7/keeper-cli.rs"
@@ -59,7 +60,13 @@ run_task = { name = [
 
 [tasks.A]
 description = "Full verification sweep for the repository."
-run_task = { name = ["format", "check", "clippy", "a"], parallel = false }
+run_task = { name = [
+  "format",
+  "ci-markdown",
+  "check",
+  "clippy",
+  "a",
+], parallel = false }
 
 [tasks.r]
 run_task = { name = ["run"], parallel = false }

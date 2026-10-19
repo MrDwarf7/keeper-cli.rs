@@ -3,8 +3,7 @@ CHANGELOG_ARGS_BASE = "--repository https://github.com/mrdwarf7/keeper-cli.rs --
 
 # Git-cliff based version bumping
 # git-cliff --bump calculates the new version and updates changelog
-# We use cargo set-version (from cargo-edit) to update Cargo.toml
-# If cargo-edit not available, fall back to sed
+# cargo-edit is installed by mise and runs through CARGO_CMD.
 
 # --- patch bump (e.g. 1.0.0 -> 1.0.1) ---
 [tasks.bump_patch]
@@ -16,11 +15,8 @@ run_task = { name = [
 ], parallel = false }
 
 [tasks.bump_patch_version]
-command = "sh"
-args = [
-  "-c",
-  "if command -v cargo-set-version >/dev/null 2>&1; then cargo set-version --bump patch; else sed -i 's/^version = \\([0-9]\\+\\)\\.\\([0-9]\\+\\)\\.\\([0-9]\\+\\)/version = \\1.\\2.$((\\3+1))/' Cargo.toml; fi",
-]
+command = "${CARGO_CMD}"
+args = ["set-version", "--bump", "patch"]
 description = "Bump patch version in Cargo.toml"
 
 [tasks.gen_changelog_patch]
@@ -50,11 +46,8 @@ run_task = { name = [
 ], parallel = false }
 
 [tasks.bump_minor_version]
-command = "sh"
-args = [
-  "-c",
-  "if command -v cargo-set-version >/dev/null 2>&1; then cargo set-version --bump minor; else sed -i 's/^version = \\([0-9]\\+\\)\\.\\([0-9]\\+\\)\\.\\([0-9]\\+\\)/version = \\1.$((\\2+1)).0/' Cargo.toml; fi",
-]
+command = "${CARGO_CMD}"
+args = ["set-version", "--bump", "minor"]
 description = "Bump minor version in Cargo.toml"
 
 [tasks.gen_changelog_minor]
@@ -83,11 +76,8 @@ run_task = { name = [
 ], parallel = false }
 
 [tasks.bump_major_version]
-command = "sh"
-args = [
-  "-c",
-  "if command -v cargo-set-version >/dev/null 2>&1; then cargo set-version --bump major; else sed -i 's/^version = \\([0-9]\\+\\)\\.\\([0-9]\\+\\)\\.\\([0-9]\\+\\)/version = $((\\1+1)).0.0/' Cargo.toml; fi",
-]
+command = "${CARGO_CMD}"
+args = ["set-version", "--bump", "major"]
 description = "Bump major version in Cargo.toml"
 
 [tasks.gen_changelog_major]
