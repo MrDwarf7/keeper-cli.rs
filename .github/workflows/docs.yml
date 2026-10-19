@@ -117,6 +117,8 @@ jobs:
 
   publish-docs:
     name: "Docs - publish-docs"
+    # Pushes to main must not publish a release; run this workflow manually to refresh it.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: write
     runs-on: "ubuntu-latest"
